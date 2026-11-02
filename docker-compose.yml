@@ -1,0 +1,143 @@
+name: kumbh-setu
+
+services:
+  postgres:
+    # PostGIS build of PostgreSQL 16 (multi-arch; the official postgis image has no arm64 build)
+    image: imresamu/postgis:16-3.5-alpine
+    environment:
+      POSTGRES_DB: kumbh_setu
+      POSTGRES_USER: ${POSTGRES_OWNER_USER:-kumbh_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:?set POSTGRES_OWNER_PASSWORD in .env}
+      KUMBH_APP_DB_USER: ${KUMBH_APP_DB_USER:-kumbh_app}
+      KUMBH_APP_DB_PASSWORD: ${KUMBH_APP_DB_PASSWORD:?set KUMBH_APP_DB_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d kumbh_setu"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-ttl"]
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  objectstore:
+    image: chrislusf/seaweedfs:3.80
+    entrypoint: ["/bin/sh", "/entrypoint-kumbh.sh"]
+    environment:
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - objectdata:/data
+      - ./docker/objectstore/entrypoint.sh:/entrypoint-kumbh.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  storage-init:
+    build: ./backend
+    command: ["python", "-m", "app.cli", "ensure-bucket"]
+    env_file: .env
+    environment:
+      S3_ENDPOINT_URL: http://objectstore:8333
+    depends_on:
+      objectstore:
+        condition: service_healthy
+
+  migrate:
+    # Upgrades whichever database DATABASE_URL points at. Do not run this against the
+    # operational volume until a restored copy has been upgraded and the recovery plan is approved.
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_OWNER_USER:-kumbh_owner}:${POSTGRES_OWNER_PASSWORD}@postgres:5432/kumbh_setu
+      KUMBH_APP_DB_ROLE: ${KUMBH_APP_DB_USER:-kumbh_app}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["ops"]
+
+  api:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${KUMBH_APP_DB_USER:-kumbh_app}:${KUMBH_APP_DB_PASSWORD}@postgres:5432/kumbh_setu
+      S3_ENDPOINT_URL: http://objectstore:8333
+      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:8333}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  scan-worker:
+    profiles: ["workers"]
+    build: ./backend
+    command: ["python", "-m", "app.cli", "scan-worker", "--interval", "5"]
+    env_file: .env
+    environment: &worker_env
+      DATABASE_URL: postgresql+psycopg://${KUMBH_APP_DB_USER:-kumbh_app}:${KUMBH_APP_DB_PASSWORD}@postgres:5432/kumbh_setu
+      S3_ENDPOINT_URL: http://objectstore:8333
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      objectstore:
+        condition: service_healthy
+    restart: unless-stopped
+
+  notifications-worker:
+    profiles: ["workers"]
+    build: ./backend
+    command: ["python", "-m", "app.cli", "notifications-worker", "--interval", "5"]
+    env_file: .env
+    environment: *worker_env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  maintenance-worker:
+    profiles: ["workers"]
+    build: ./backend
+    command: ["python", "-m", "app.cli", "maintenance-worker", "--interval", "60"]
+    env_file: .env
+    environment: *worker_env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      objectstore:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  objectdata:
