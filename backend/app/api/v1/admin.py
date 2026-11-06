@@ -14,6 +14,7 @@ from app.schemas.admin import (
     StationRead,
     StationUpdate,
     UserCreate,
+    UserDirectoryEntry,
     UserRead,
     UserUpdate,
 )
@@ -55,6 +56,27 @@ def assignable_officers(
 ) -> list[OfficerSummary]:
     """Active police officers who can receive assignments. Officers see their own station only."""
     return admin_service.list_assignable_officers(db, principal.user, station_id)
+
+
+@users.get(
+    "/directory",
+    response_model=list[UserDirectoryEntry],
+    responses=AUTHED,
+    summary="Resolve user ids to display names (all roles)",
+)
+def user_directory(
+    principal: CurrentPrincipal,
+    db: DbSession,
+    ids: Annotated[list[uuid.UUID], Query(min_length=1, max_length=100)],
+) -> list[UserDirectoryEntry]:
+    """
+    Returns id, full_name, role, and station_id only. Use this to show who reported a case,
+    who is assigned, or who wrote a note. Unknown ids are omitted.
+    """
+    return [
+        UserDirectoryEntry.model_validate(u)
+        for u in admin_service.directory_lookup(db, principal.user, ids)
+    ]
 
 
 @users.get("", dependencies=_USER_ADMIN, response_model=Page[UserRead], responses=AUTHED)

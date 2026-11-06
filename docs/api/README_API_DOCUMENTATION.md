@@ -8,7 +8,7 @@ Backend API documentation for the lost-and-found and case-management system for 
 
 | Document | Use it for |
 |---|---|
-| [API_ENDPOINT_CATALOG.md](./API_ENDPOINT_CATALOG.md) | Every operation (81 in OpenAPI + `/metrics`), roles, main errors, implementation status, role → permission matrix, visibility rules |
+| [API_ENDPOINT_CATALOG.md](./API_ENDPOINT_CATALOG.md) | Every operation (83 in OpenAPI + `/metrics`), roles, main errors, implementation status, role → permission matrix, visibility rules |
 | [API_REQUEST_RESPONSE_REFERENCE.md](./API_REQUEST_RESPONSE_REFERENCE.md) | Exact request/response contracts and examples per endpoint; error codes; rate limits |
 | [FRONTEND_INTEGRATION_GUIDE.md](./FRONTEND_INTEGRATION_GUIDE.md) | Token handling, API client, TypeScript types, uploads, validation mapping, permission-based UI, CORS |
 | [SCREEN_TO_API_MAPPING.md](./SCREEN_TO_API_MAPPING.md) | Which endpoints each screen uses and whether the screen is Ready, Partial, or Blocked |
@@ -36,9 +36,9 @@ Backend API documentation for the lost-and-found and case-management system for 
 
 ## Status summary
 
-- 81 OpenAPI operations: 80 implemented with recorded test evidence, 1 implemented with no test found (`GET /users/{user_id}`). Of those, the family notification endpoint is blocked for delivery and the dashboard and CSV export are partial.
-- Screens: 10 Ready, 10 Partial, 2 Blocked.
-- Two defects found by inspection: `language` length mismatch causing `500` (G-15, P0) and `CaseSummary.location_id` always `null` (G-14).
+- 83 OpenAPI operations: 82 implemented with recorded test evidence, 1 implemented with no test found (`GET /users/{user_id}`). Of those, the family notification endpoint is blocked for delivery and the dashboard and CSV export are partial.
+- Screens: 12 Ready, 8 Partial, 2 Blocked.
+- Phase 1 portal backend gaps closed: G-15 (`language` max 100), G-14 (`CaseSummary.location_id` + age/gender), G-1 (`GET /matches`), G-3 (`GET /users/directory`). See [docs/evidence/PHASE1_PORTAL.md](../evidence/PHASE1_PORTAL.md).
 
 ## Assumptions
 

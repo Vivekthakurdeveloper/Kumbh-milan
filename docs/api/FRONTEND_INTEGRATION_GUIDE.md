@@ -346,7 +346,8 @@ export type CaseUpdate<T> = Omit<T, "station_id"> & { expected_version?: number 
 export interface CaseSummary {
   id: UUID; case_number: string; case_type: CaseType; status: CaseStatus; urgency_level: UrgencyLevel | null;
   station_id: UUID; assigned_to_user_id: UUID | null; title: string | null; location: string | null;
-  location_id: UUID | null; event_at: ISODateTime | null; version: number;
+  location_id: UUID | null; approximate_age: number | null; age_group: AgeGroup | null; gender: Gender | null;
+  event_at: ISODateTime | null; version: number;
   created_at: ISODateTime; updated_at: ISODateTime; in_scope: boolean;
 }
 
@@ -359,6 +360,16 @@ export interface MatchRead {
   reviewed_by_user_id: UUID | null; reviewed_at: ISODateTime | null; review_evidence: string | null;
   revoked_by_user_id: UUID | null; revoked_at: ISODateTime | null; revocation_reason: string | null;
   created_at: ISODateTime;
+}
+
+/** Cross-case review queue row from GET /matches. */
+export interface MatchQueueItem extends Omit<MatchRead, "counterpart"> {
+  left_case: CaseSummary;
+  right_case: CaseSummary;
+}
+
+export interface UserDirectoryEntry {
+  id: UUID; full_name: string; role: Role; station_id: UUID | null;
 }
 
 export interface AttachmentRead {
@@ -413,6 +424,15 @@ export const listCases = <T extends AnyCaseRead>(type: CaseType, f: CaseFilters,
 
 export const searchCases = (f: CaseFilters & { case_type?: CaseType; all_stations?: boolean }) =>
   api<Page<CaseSummary>>("/cases", { query: { ...f } as never }).then((r) => r.data);
+
+export const listMatchQueue = (f: {
+  status?: MatchStatus; confidence_band?: ConfidenceBand; match_domain?: "PERSON" | "ITEM";
+  limit?: number; offset?: number;
+} = {}) =>
+  api<Page<MatchQueueItem>>("/matches", { query: { status: "PROPOSED", ...f } as never }).then((r) => r.data);
+
+export const userDirectory = (ids: UUID[]) =>
+  api<UserDirectoryEntry[]>("/users/directory", { query: { ids } as never }).then((r) => r.data);
 ```
 
 - Page size: default 25, maximum 100. Compute pages as `Math.ceil(total / limit)`.
@@ -489,7 +509,7 @@ Mirror these rules client-side for immediate feedback:
 | Rule | Fields |
 |---|---|
 | Required on create | Lost/found items: `item_category` (2–64), `item_name` (1–200). Nothing else is required. |
-| Length | Short text 1–200; location text 1–500; long text 1–5000; `reason` 3–2000 (match revoke `reason` 10–5000); evidence 10–5000; `recipient_acknowledgement` 10–500; `contact_details` 3–1000; `note_text` 1–10000; `rationale` 10–5000. **`language` ≤100** (the API accepts 200 but the database column is 100; see gap G-15). |
+| Length | Short text 1–200; location text 1–500; long text 1–5000; `reason` 3–2000 (match revoke `reason` 10–5000); evidence 10–5000; `recipient_acknowledgement` 10–500; `contact_details` 3–1000; `note_text` 1–10000; `rationale` 10–5000; **`language` ≤100** (validated; matches the database column). |
 | Empty strings | Send `null` or omit the field. An empty string fails `min_length=1` for most fields. |
 | Numbers | `approximate_age` 0–120 integer. |
 | Times | Not in the future (5 min tolerance); offset required. |
@@ -505,7 +525,7 @@ Mirror these rules client-side for immediate feedback:
 | Error | Show the mapped message and `request_id`. Offer "Retry" for GETs. |
 | Retry | Automatic retry (max 2, exponential backoff) only for GETs and idempotency-keyed POSTs on network errors, `503`, and `500`. Never auto-retry `4xx` except `401 token_expired` (refresh) and `429` (after `Retry-After`). |
 | Stale data | After any mutation, invalidate the case detail, the case's history, matches, and the relevant lists and dashboard. |
-| Offline | No offline/sync API exists. If help desks need offline registration, queue submissions locally with their `Idempotency-Key` and replay when online (the key prevents duplicates within 24 h). |
+| Offline | Use `POST /api/v1/sync/push`, `GET /api/v1/sync/pull`, and `GET /api/v1/sync/status` with stable `device_id` + `client_record_id`. See [docs/MOBILE_SYNC.md](../MOBILE_SYNC.md). `Idempotency-Key` remains useful for online retries (24 h TTL). |
 
 ## 11. Role-based UI access
 
@@ -534,7 +554,7 @@ UI gating is a convenience only; the backend enforces every check. Additional ru
 - Non-admins register cases at their own station; hide the station picker. Admins must choose a station.
 - Admins cannot deactivate or demote themselves.
 
-**Resolving user names:** case responses contain user ids only. Admins can resolve via `GET /users/{id}`; police can resolve officers of their station via `GET /users/assignable-officers`; help-desk users have **no** way to resolve names (gap G-3). Show "Officer" plus badge when known, otherwise a short id.
+**Resolving user names:** case responses contain user ids only. Resolve them with `GET /users/directory?ids=…` (all roles; returns `id`, `full_name`, `role`, `station_id` only). Admins can still use `GET /users/{id}` for full records; police use `GET /users/assignable-officers` for the assign dialog.
 
 ## 12. Status badges and workflow actions
 

@@ -209,7 +209,14 @@ def generate_on_request(db: Session, actor: User, case_id: uuid.UUID) -> list[uu
     case = load_case(db, actor, case_id)
     if case.status not in MATCH_CONFIRMATION_SOURCES:
         raise Conflict(f"{case.status.title()} cases are not matched automatically", code="case_not_matchable")
-    return generate_for_case(db, case.id, actor=actor)
+    created = generate_for_case(db, case.id, actor=actor)
+    from app.config import get_settings as _settings
+    from app.services import faces as face_service
+    from app.storage import get_storage
+
+    if _settings().face_matching_enabled:
+        created = list(dict.fromkeys([*created, *face_service.compare_case(db, get_storage(), case.id, actor=actor)]))
+    return created
 
 
 def run_after_change(case_id: uuid.UUID) -> None:

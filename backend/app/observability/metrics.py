@@ -34,6 +34,11 @@ MATCH_SUGGESTIONS = Counter(
     "kumbh_match_suggestions_total", "Automatic match suggestions stored", ["domain", "band"], registry=REGISTRY
 )
 MATCHING_FAILURES = Counter("kumbh_matching_failures_total", "Automatic matching runs that failed", registry=REGISTRY)
+FACE_ANALYSES = Counter(
+    "kumbh_face_analyses_total", "Face analysis outcomes for person photographs", ["status"], registry=REGISTRY
+)
+FACE_CANDIDATES = Counter("kumbh_face_candidates_total", "Face-based match candidates stored", registry=REGISTRY)
+FACE_FAILURES = Counter("kumbh_face_failures_total", "Face pipeline runs that failed", registry=REGISTRY)
 SCAN_OUTCOMES = Counter("kumbh_scan_outcomes_total", "Malware scan outcomes", ["outcome"], registry=REGISTRY)
 NOTIFICATION_OUTCOMES = Counter(
     "kumbh_notification_outcomes_total", "Notification delivery outcomes", ["channel", "outcome"], registry=REGISTRY
@@ -50,6 +55,10 @@ class DatabaseStateCollector(Collector):
         "attachments_quarantined": "SELECT count(*) FROM case_attachments WHERE scan_status IN ('QUARANTINED', 'SCANNING')",
         "attachments_scan_failed": "SELECT count(*) FROM case_attachments WHERE scan_status = 'SCAN_FAILED'",
         "matches_awaiting_review": "SELECT count(*) FROM case_matches WHERE status = 'PROPOSED'",
+        "face_matches_awaiting_review": (
+            "SELECT count(*) FROM case_matches WHERE status = 'PROPOSED' AND source = 'FACE'"
+        ),
+        "staff_notifications_unread": "SELECT count(*) FROM staff_notifications WHERE status = 'UNREAD'",
         "notifications_pending": "SELECT count(*) FROM notifications WHERE status IN ('PENDING', 'SENDING')",
         "notifications_failed": "SELECT count(*) FROM notifications WHERE status = 'FAILED'",
         "worker_heartbeats_not_ok": (

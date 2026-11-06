@@ -4,7 +4,7 @@ Statuses are only `PASS`, `FAIL`, `BLOCKED`, or `NOT_VERIFIED`.
 
 | Tier | Status | Basis |
 |---|---|---|
-| Local development | PASS | Disposable Postgres on port 5434: 222 passed, 1 skipped, 0 failed. The rebuilt image is Python 3.12.15 and expects schema `0007`. |
+| Local development | PASS | Local Postgres: 233 passed, 3 skipped, 0 failed (2026-11-05, Phase 1 portal gaps). Image is Python 3.12.15 and expects schema `0007`. |
 | Shared development | NOT_VERIFIED | The shared operational volume is still at the pre-upgrade revision represented by the copy (`0001`). It was not migrated. Workers were not started there. |
 | Internal demonstration | BLOCKED | Demonstration needs the operational database at revision `0007` and a decision to start the API against it. |
 | Controlled pilot | BLOCKED | No approved MFA programme, notification provider, retention periods, or ClamAV deployment. |

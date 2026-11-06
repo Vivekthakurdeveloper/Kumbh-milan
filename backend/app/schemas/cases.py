@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from app.models.enums import (
     AgeGroup,
@@ -22,6 +22,9 @@ from app.schemas.common import (
     ShortText,
     StrictModel,
 )
+
+# Matches VARCHAR(100) on missing_person_details.language / found_person_details.language.
+LanguageText = Annotated[str, StringConstraints(min_length=1, max_length=100)]
 
 ContactText = Field(
     None,
@@ -68,6 +71,24 @@ class CaseCreateCommon(CoordinateInput):
         None, description="Admins only. Officers and help-desk operators always register at their own station."
     )
     contact_details: str | None = ContactText
+    client_id: Annotated[str | None, StringConstraints(min_length=1, max_length=128)] = Field(
+        None, description="Optional app-instance id for offline sync"
+    )
+    device_id: Annotated[str | None, StringConstraints(min_length=1, max_length=128)] = Field(
+        None, description="Required with client_record_id; identifies the device that created the record offline"
+    )
+    client_record_id: Annotated[str | None, StringConstraints(min_length=1, max_length=128)] = Field(
+        None, description="Stable client-generated id; retries with the same id return the original case"
+    )
+    client_created_at: PastDatetime | None = Field(
+        None, description="When the record was created on the device (UTC)"
+    )
+
+    @model_validator(mode="after")
+    def _sync_fields_consistent(self):
+        if self.client_record_id is not None and self.device_id is None:
+            raise ValueError("device_id is required when client_record_id is sent")
+        return self
 
 
 class CaseUpdateCommon(CoordinateInput):
@@ -114,6 +135,9 @@ class CaseSummary(ReadModel):
     title: str | None
     location: str | None
     location_id: uuid.UUID | None = None
+    approximate_age: int | None = None
+    age_group: AgeGroup | None = None
+    gender: Gender | None = None
     event_at: datetime | None
     version: int
     created_at: datetime
@@ -132,7 +156,7 @@ class MissingPersonFields(StrictModel):
     height_description: ShortText | None = None
     clothing_description: LongText | None = None
     identifying_marks: LongText | None = None
-    language: ShortText | None = None
+    language: LanguageText | None = None
     last_seen_location: LocationText | None = None
     last_seen_at: PastDatetime | None = None
     has_disability: bool | None = None
@@ -169,7 +193,7 @@ class FoundPersonFields(StrictModel):
     found_location: LocationText | None = None
     found_at: PastDatetime | None = None
     communication_status: CommunicationStatus | None = None
-    language: ShortText | None = None
+    language: LanguageText | None = None
     has_disability: bool | None = None
     care_or_assistance_required: LongText | None = None
     current_care_location: LocationText | None = None

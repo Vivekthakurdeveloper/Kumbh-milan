@@ -20,6 +20,8 @@ Contact reveal requires `case:contact_read` and a reason code: `REUNIFICATION_RE
 
 Contact values are Fernet ciphertext. A single `CONTACT_ENCRYPTION_KEY` is used. There is no dual-key re-encryption path, so existing ciphertext must not be migrated to a new key until a recovery window is approved. Losing the key makes stored contacts unreadable. Logs and readiness bodies do not include connection strings or contact values. Notification templates contain the case number and station name only. The mock provider stores a masked phone.
 
+Facial embeddings use a separate Fernet key (`FACE_EMBEDDING_ENCRYPTION_KEY`). Embeddings are never returned by public APIs; audit redaction covers `embedding` and `embedding_ciphertext`. Face photographs are used only for authorised match review. Processing biometric data for production needs privacy/legal approval. `FACE_EMBEDDING_RETENTION_DAYS` is an operational default (30), not a legally approved period. FACE candidates require two different authorised officers before confirmation; a match never automatically reunites two people.
+
 ## Files
 
 Uploads are signature-checked, stored under generated keys, and left quarantined until a scanner promotes them. `SCAN_MODE=disabled` is not a clean result. Reconciliation reports missing objects and does not delete database rows.

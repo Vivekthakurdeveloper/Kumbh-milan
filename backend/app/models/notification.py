@@ -1,13 +1,30 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base
-from app.models.enums import NotificationChannel, NotificationStatus, NotificationTemplate, enum_type
-from app.models.mixins import TimestampMixin, uuid_pk
+from app.models.enums import (
+    NotificationChannel,
+    NotificationStatus,
+    NotificationTemplate,
+    StaffNotificationKind,
+    StaffNotificationStatus,
+    enum_type,
+)
+from app.models.mixins import CreatedAtMixin, TimestampMixin, uuid_pk
 
 
 def _user(nullable: bool = False) -> Mapped[uuid.UUID]:
@@ -49,3 +66,37 @@ class Notification(TimestampMixin, Base):
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)
     consent_statement: Mapped[str] = mapped_column(Text, nullable=False)
     requested_by_user_id: Mapped[uuid.UUID] = _user()
+
+
+class StaffNotification(CreatedAtMixin, Base):
+    """In-app notification for authorised staff. No SMS, WhatsApp or email."""
+
+    __tablename__ = "staff_notifications"
+    __table_args__ = (
+        UniqueConstraint("recipient_user_id", "match_id", "kind", name="uq_staff_notifications_recipient_match_kind"),
+        CheckConstraint(
+            "(status = 'READ') = (read_at IS NOT NULL)",
+            name="staff_notification_read_at_matches_status",
+        ),
+        Index("ix_staff_notifications_recipient_created", "recipient_user_id", "created_at"),
+        Index(
+            "ix_staff_notifications_recipient_unread",
+            "recipient_user_id",
+            postgresql_where=text("status = 'UNREAD'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    recipient_user_id: Mapped[uuid.UUID] = _user()
+    kind: Mapped[StaffNotificationKind] = mapped_column(
+        enum_type(StaffNotificationKind, "staff_notification_kind"), nullable=False
+    )
+    match_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("case_matches.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[StaffNotificationStatus] = mapped_column(
+        enum_type(StaffNotificationStatus, "staff_notification_status"),
+        nullable=False,
+        server_default=StaffNotificationStatus.UNREAD.value,
+    )
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

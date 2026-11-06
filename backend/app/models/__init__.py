@@ -7,12 +7,14 @@ from app.models.case import (
     LostItemDetails,
     MissingPersonDetails,
 )
+from app.models.face import FaceEmbedding
 from app.models.geo import Location
-from app.models.notification import Notification
+from app.models.notification import Notification, StaffNotification
 from app.models.operations import WorkerHeartbeat
 from app.models.organization import Station, User
 from app.models.retention import LegalHold, RetentionRun
 from app.models.security import IdempotencyKey, LoginAttempt, RefreshToken
+from app.models.sync import SyncDevice
 from app.models.workflow import (
     CaseAssignment,
     CaseAttachment,
@@ -32,6 +34,7 @@ __all__ = [
     "CaseNote",
     "CaseNumberCounter",
     "CaseStatusHistory",
+    "FaceEmbedding",
     "FoundItemDetails",
     "FoundPersonDetails",
     "IdempotencyKey",
@@ -43,7 +46,9 @@ __all__ = [
     "Notification",
     "RefreshToken",
     "RetentionRun",
+    "StaffNotification",
     "Station",
+    "SyncDevice",
     "User",
     "WorkerHeartbeat",
 ]

@@ -23,6 +23,8 @@ dependencies = [
     "email-validator==2.2.0",
     "redis==5.2.1",
     "prometheus-client==0.21.1",
+    "numpy==2.2.1",
+    "opencv-python-headless==4.10.0.84",
 ]
 
 [project.optional-dependencies]

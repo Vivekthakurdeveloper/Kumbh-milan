@@ -1,14 +1,16 @@
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, StringConstraints, model_validator
 
 from app.models.enums import (
     CaseStatus,
     ConfidenceBand,
     CustodyStatus,
+    FaceStatus,
     MatchDomain,
+    MatchReviewStage,
     MatchSource,
     MatchStatus,
     MediaType,
@@ -16,7 +18,7 @@ from app.models.enums import (
     ScanStatus,
 )
 from app.schemas.cases import CaseSummary
-from app.schemas.common import LocationText, ReadModel, Reason, StrictModel
+from app.schemas.common import LocationText, PastDatetime, ReadModel, Reason, StrictModel
 
 Evidence = Field(None, min_length=10, max_length=5000)
 ExpectedVersion = Field(
@@ -58,6 +60,16 @@ class NoteCreate(StrictModel):
     note_type: NoteType = NoteType.OPERATIONAL
     is_sensitive: bool = False
     corrects_note_id: uuid.UUID | None = Field(None, description="Required when note_type is CORRECTION")
+    client_id: Annotated[str | None, StringConstraints(min_length=1, max_length=128)] = None
+    device_id: Annotated[str | None, StringConstraints(min_length=1, max_length=128)] = None
+    client_record_id: Annotated[str | None, StringConstraints(min_length=1, max_length=128)] = None
+    client_created_at: PastDatetime | None = None
+
+    @model_validator(mode="after")
+    def _sync_fields_consistent(self):
+        if self.client_record_id is not None and self.device_id is None:
+            raise ValueError("device_id is required when client_record_id is sent")
+        return self
 
 
 class NoteRead(ReadModel):
@@ -130,7 +142,8 @@ class MatchRead(StrictModel):
     match_domain: MatchDomain
     status: MatchStatus
     source: MatchSource
-    score: float | None = Field(description="Automatic suggestions only: 0-1 ranking score. Not proof of identity.")
+    review_stage: MatchReviewStage
+    score: float | None = Field(description="Automatic / face suggestions: 0-1 ranking score. Not proof of identity.")
     confidence_band: ConfidenceBand | None
     reasons: list[MatchReason] | None = Field(description="Per-feature explanation of an automatic score")
     engine_version: str | None
@@ -139,8 +152,53 @@ class MatchRead(StrictModel):
     left_case_version: int
     right_case_version: int
     counterpart: CaseSummary
+    left_attachment_id: uuid.UUID | None = None
+    right_attachment_id: uuid.UUID | None = None
+    face_similarity: float | None = Field(
+        None, description="Actual SFace cosine similarity when a face candidate exists. Not proof of identity."
+    )
+    face_model: str | None = None
     proposed_by_user_id: uuid.UUID | None
     rationale: str | None
+    first_approved_by_user_id: uuid.UUID | None = None
+    first_approved_at: datetime | None = None
+    first_approval_evidence: str | None = None
+    reviewed_by_user_id: uuid.UUID | None
+    reviewed_at: datetime | None
+    review_evidence: str | None
+    revoked_by_user_id: uuid.UUID | None
+    revoked_at: datetime | None
+    revocation_reason: str | None
+    created_at: datetime
+
+
+class MatchQueueItem(StrictModel):
+    """Cross-case review queue row. Both sides are summarised (and redacted) for the caller."""
+
+    id: uuid.UUID
+    match_domain: MatchDomain
+    status: MatchStatus
+    source: MatchSource
+    review_stage: MatchReviewStage
+    score: float | None = Field(description="Automatic / face suggestions: 0-1 ranking score. Not proof of identity.")
+    confidence_band: ConfidenceBand | None
+    reasons: list[MatchReason] | None = Field(description="Per-feature explanation of an automatic score")
+    engine_version: str | None
+    left_case_id: uuid.UUID
+    right_case_id: uuid.UUID
+    left_case_version: int
+    right_case_version: int
+    left_case: CaseSummary
+    right_case: CaseSummary
+    left_attachment_id: uuid.UUID | None = None
+    right_attachment_id: uuid.UUID | None = None
+    face_similarity: float | None = None
+    face_model: str | None = None
+    proposed_by_user_id: uuid.UUID | None
+    rationale: str | None
+    first_approved_by_user_id: uuid.UUID | None = None
+    first_approved_at: datetime | None = None
+    first_approval_evidence: str | None = None
     reviewed_by_user_id: uuid.UUID | None
     reviewed_at: datetime | None
     review_evidence: str | None
@@ -177,6 +235,9 @@ class AttachmentRead(ReadModel):
     scan_status: ScanStatus
     scanned_at: datetime | None = None
     downloadable: bool = Field(False, description="True once the file passed malware scanning")
+    face_status: FaceStatus | None = Field(
+        None, description="Face analysis outcome for person photographs; embeddings are never exposed"
+    )
     created_at: datetime
 
 

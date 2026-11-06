@@ -772,6 +772,94 @@
         }
       }
     },
+    "/api/v1/users/directory": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Resolve user ids to display names (all roles)",
+        "description": "Returns id, full_name, role, and station_id only. Use this to show who reported a case,\nwho is assigned, or who wrote a note. Unknown ids are omitted.",
+        "operationId": "user_directory_api_v1_users_directory_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "minItems": 1,
+              "maxItems": 100,
+              "title": "Ids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserDirectoryEntry"
+                  },
+                  "title": "Response User Directory Api V1 Users Directory Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users": {
       "get": {
         "tags": [
@@ -8298,6 +8386,641 @@
         }
       }
     },
+    "/api/v1/matches": {
+      "get": {
+        "tags": [
+          "Matches"
+        ],
+        "summary": "Match review queue across cases visible to the caller",
+        "description": "Returns matches that touch at least one in-scope case. Defaults to PROPOSED so police can\nwork the review queue without opening each case. Confirm or reject via\nPOST /cases/{id}/matches/{mid}/review. Filter source=FACE for AI candidates.",
+        "operationId": "list_match_queue_api_v1_matches_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MatchStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "PROPOSED",
+              "title": "Status"
+            }
+          },
+          {
+            "name": "confidence_band",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ConfidenceBand"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence Band"
+            }
+          },
+          {
+            "name": "match_domain",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MatchDomain"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Match Domain"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MatchSource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 25,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_MatchQueueItem_"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/matches/{match_id}": {
+      "get": {
+        "tags": [
+          "Matches"
+        ],
+        "summary": "Side-by-side match review detail",
+        "operationId": "get_match_api_v1_matches__match_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/matches/{match_id}/photos/{side}": {
+      "get": {
+        "tags": [
+          "Matches"
+        ],
+        "summary": "Presigned URL for a candidate photograph on a match",
+        "operationId": "get_match_photo_api_v1_matches__match_id__photos__side__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          },
+          {
+            "name": "side",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "left",
+                "right"
+              ],
+              "type": "string",
+              "title": "Side"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchPhotoUrl"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/matches/{match_id}/history": {
+      "get": {
+        "tags": [
+          "Matches"
+        ],
+        "summary": "Audit history for a match (suggestion, approvals, rejection)",
+        "operationId": "get_match_history_api_v1_matches__match_id__history_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MatchHistoryEvent"
+                  },
+                  "title": "Response Get Match History Api V1 Matches  Match Id  History Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/staff-notifications": {
+      "get": {
+        "tags": [
+          "Staff notifications"
+        ],
+        "summary": "In-app notifications for the authenticated officer",
+        "operationId": "list_notifications_api_v1_staff_notifications_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/StaffNotificationStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 25,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_StaffNotificationRead_"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/staff-notifications/{notification_id}/read": {
+      "post": {
+        "tags": [
+          "Staff notifications"
+        ],
+        "summary": "Mark a staff notification as read",
+        "operationId": "mark_read_api_v1_staff_notifications__notification_id__read_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "notification_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Notification Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffNotificationRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/audit-events": {
       "get": {
         "tags": [
@@ -9821,6 +10544,17 @@
             "description": "True once the file passed malware scanning",
             "default": false
           },
+          "face_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FaceStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Face analysis outcome for person photographs; embeddings are never exposed"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -10221,6 +10955,37 @@
             ],
             "title": "Location Id"
           },
+          "approximate_age": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approximate Age"
+          },
+          "age_group": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgeGroup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Gender"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "event_at": {
             "anyOf": [
               {
@@ -10557,6 +11322,16 @@
           "error"
         ],
         "title": "ErrorResponse"
+      },
+      "FaceStatus": {
+        "type": "string",
+        "enum": [
+          "FACE_FOUND",
+          "NO_FACE",
+          "MULTIPLE_FACES",
+          "UNREADABLE"
+        ],
+        "title": "FaceStatus"
       },
       "FoundItemCaseRead": {
         "properties": {
@@ -11541,7 +12316,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 200,
+                "maxLength": 100,
                 "minLength": 1
               },
               {
@@ -11820,7 +12595,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 200,
+                "maxLength": 100,
                 "minLength": 1
               },
               {
@@ -11996,7 +12771,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 200,
+                "maxLength": 100,
                 "minLength": 1
               },
               {
@@ -12340,7 +13115,7 @@
             ],
             "title": "Name Local",
             "examples": [
-              "हर की पौड़ी"
+              "\u0939\u0930 \u0915\u0940 \u092a\u094c\u0921\u093c\u0940"
             ]
           },
           "sector_id": {
@@ -13274,6 +14049,306 @@
         "type": "object",
         "title": "LostItemUpdate"
       },
+      "MatchDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "match_domain": {
+            "$ref": "#/components/schemas/MatchDomain"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MatchStatus"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MatchSource"
+          },
+          "review_stage": {
+            "$ref": "#/components/schemas/MatchReviewStage"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "confidence_band": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Band"
+          },
+          "reasons": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MatchReason"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasons"
+          },
+          "engine_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine Version"
+          },
+          "left_case_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Left Case Id"
+          },
+          "right_case_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Right Case Id"
+          },
+          "left_case_version": {
+            "type": "integer",
+            "title": "Left Case Version"
+          },
+          "right_case_version": {
+            "type": "integer",
+            "title": "Right Case Version"
+          },
+          "left_case": {
+            "$ref": "#/components/schemas/CaseSummary"
+          },
+          "right_case": {
+            "$ref": "#/components/schemas/CaseSummary"
+          },
+          "left_attachment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Left Attachment Id"
+          },
+          "right_attachment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Attachment Id"
+          },
+          "face_similarity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Similarity",
+            "description": "Actual model cosine similarity. Not proof of identity."
+          },
+          "face_similarity_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Similarity Threshold"
+          },
+          "face_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Model"
+          },
+          "proposed_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed By User Id"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "first_approved_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Approved By User Id"
+          },
+          "first_approved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Approved At"
+          },
+          "first_approval_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Approval Evidence"
+          },
+          "reviewed_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By User Id"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "review_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Evidence"
+          },
+          "revoked_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked By User Id"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "revocation_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revocation Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "match_domain",
+          "status",
+          "source",
+          "review_stage",
+          "left_case_id",
+          "right_case_id",
+          "left_case_version",
+          "right_case_version",
+          "left_case",
+          "right_case",
+          "created_at"
+        ],
+        "title": "MatchDetail",
+        "description": "Side-by-side review payload for an authorised officer. Embeddings are never included."
+      },
       "MatchDomain": {
         "type": "string",
         "enum": [
@@ -13304,6 +14379,102 @@
         ],
         "title": "MatchGenerateResult"
       },
+      "MatchHistoryEvent": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor User Id"
+          },
+          "after_state": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After State"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "actor_user_id",
+          "after_state",
+          "reason",
+          "created_at"
+        ],
+        "title": "MatchHistoryEvent"
+      },
+      "MatchPhotoUrl": {
+        "properties": {
+          "side": {
+            "type": "string",
+            "title": "Side"
+          },
+          "attachment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Attachment Id"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "side",
+          "attachment_id",
+          "url",
+          "expires_in",
+          "content_type"
+        ],
+        "title": "MatchPhotoUrl"
+      },
       "MatchProposeRequest": {
         "properties": {
           "other_case_id": {
@@ -13326,7 +14497,7 @@
         ],
         "title": "MatchProposeRequest"
       },
-      "MatchRead": {
+      "MatchQueueItem": {
         "properties": {
           "id": {
             "type": "string",
@@ -13342,6 +14513,9 @@
           "source": {
             "$ref": "#/components/schemas/MatchSource"
           },
+          "review_stage": {
+            "$ref": "#/components/schemas/MatchReviewStage"
+          },
           "score": {
             "anyOf": [
               {
@@ -13352,7 +14526,7 @@
               }
             ],
             "title": "Score",
-            "description": "Automatic suggestions only: 0-1 ranking score. Not proof of identity."
+            "description": "Automatic / face suggestions: 0-1 ranking score. Not proof of identity."
           },
           "confidence_band": {
             "anyOf": [
@@ -13408,8 +14582,57 @@
             "type": "integer",
             "title": "Right Case Version"
           },
-          "counterpart": {
+          "left_case": {
             "$ref": "#/components/schemas/CaseSummary"
+          },
+          "right_case": {
+            "$ref": "#/components/schemas/CaseSummary"
+          },
+          "left_attachment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Left Attachment Id"
+          },
+          "right_attachment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Attachment Id"
+          },
+          "face_similarity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Similarity"
+          },
+          "face_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Model"
           },
           "proposed_by_user_id": {
             "anyOf": [
@@ -13433,6 +14656,41 @@
               }
             ],
             "title": "Rationale"
+          },
+          "first_approved_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Approved By User Id"
+          },
+          "first_approved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Approved At"
+          },
+          "first_approval_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Approval Evidence"
           },
           "reviewed_by_user_id": {
             "anyOf": [
@@ -13517,6 +14775,307 @@
           "match_domain",
           "status",
           "source",
+          "review_stage",
+          "score",
+          "confidence_band",
+          "reasons",
+          "engine_version",
+          "left_case_id",
+          "right_case_id",
+          "left_case_version",
+          "right_case_version",
+          "left_case",
+          "right_case",
+          "proposed_by_user_id",
+          "rationale",
+          "reviewed_by_user_id",
+          "reviewed_at",
+          "review_evidence",
+          "revoked_by_user_id",
+          "revoked_at",
+          "revocation_reason",
+          "created_at"
+        ],
+        "title": "MatchQueueItem",
+        "description": "Cross-case review queue row. Both sides are summarised (and redacted) for the caller."
+      },
+      "MatchRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "match_domain": {
+            "$ref": "#/components/schemas/MatchDomain"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MatchStatus"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MatchSource"
+          },
+          "review_stage": {
+            "$ref": "#/components/schemas/MatchReviewStage"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score",
+            "description": "Automatic / face suggestions: 0-1 ranking score. Not proof of identity."
+          },
+          "confidence_band": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfidenceBand"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasons": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MatchReason"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasons",
+            "description": "Per-feature explanation of an automatic score"
+          },
+          "engine_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine Version"
+          },
+          "left_case_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Left Case Id"
+          },
+          "right_case_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Right Case Id"
+          },
+          "left_case_version": {
+            "type": "integer",
+            "title": "Left Case Version"
+          },
+          "right_case_version": {
+            "type": "integer",
+            "title": "Right Case Version"
+          },
+          "counterpart": {
+            "$ref": "#/components/schemas/CaseSummary"
+          },
+          "left_attachment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Left Attachment Id"
+          },
+          "right_attachment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Attachment Id"
+          },
+          "face_similarity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Similarity",
+            "description": "Actual SFace cosine similarity when a face candidate exists. Not proof of identity."
+          },
+          "face_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Model"
+          },
+          "proposed_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed By User Id"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "first_approved_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Approved By User Id"
+          },
+          "first_approved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Approved At"
+          },
+          "first_approval_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Approval Evidence"
+          },
+          "reviewed_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By User Id"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "review_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Evidence"
+          },
+          "revoked_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked By User Id"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "revocation_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revocation Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "match_domain",
+          "status",
+          "source",
+          "review_stage",
           "score",
           "confidence_band",
           "reasons",
@@ -13624,6 +15183,17 @@
         ],
         "title": "MatchReviewRequest"
       },
+      "MatchReviewStage": {
+        "type": "string",
+        "enum": [
+          "AWAITING_FIRST_APPROVAL",
+          "AWAITING_SECOND_APPROVAL",
+          "CONFIRMED",
+          "REJECTED",
+          "REVOKED"
+        ],
+        "title": "MatchReviewStage"
+      },
       "MatchRevokeRequest": {
         "properties": {
           "reason": {
@@ -13645,7 +15215,8 @@
         "type": "string",
         "enum": [
           "MANUAL",
-          "AUTOMATIC"
+          "AUTOMATIC",
+          "FACE"
         ],
         "title": "MatchSource"
       },
@@ -14100,7 +15671,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 200,
+                "maxLength": 100,
                 "minLength": 1
               },
               {
@@ -14371,7 +15942,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 200,
+                "maxLength": 100,
                 "minLength": 1
               },
               {
@@ -14539,7 +16110,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 200,
+                "maxLength": 100,
                 "minLength": 1
               },
               {
@@ -14795,6 +16366,37 @@
               }
             ],
             "title": "Location Id"
+          },
+          "approximate_age": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approximate Age"
+          },
+          "age_group": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgeGroup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Gender"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "event_at": {
             "anyOf": [
@@ -15393,6 +16995,38 @@
         ],
         "title": "Page[LostItemCaseRead]"
       },
+      "Page_MatchQueueItem_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MatchQueueItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Total rows matching the filters"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[MatchQueueItem]"
+      },
       "Page_MissingPersonCaseRead_": {
         "properties": {
           "items": {
@@ -15456,6 +17090,38 @@
           "offset"
         ],
         "title": "Page[NoteRead]"
+      },
+      "Page_StaffNotificationRead_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StaffNotificationRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Total rows matching the filters"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[StaffNotificationRead]"
       },
       "Page_UserRead_": {
         "properties": {
@@ -15835,6 +17501,73 @@
         ],
         "title": "ScanStatus",
         "description": "QUARANTINED -> SCANNING -> CLEAN | REJECTED, with SCAN_FAILED after retries are exhausted."
+      },
+      "StaffNotificationKind": {
+        "type": "string",
+        "enum": [
+          "MATCH_CANDIDATE"
+        ],
+        "title": "StaffNotificationKind"
+      },
+      "StaffNotificationRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/StaffNotificationKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StaffNotificationStatus"
+          },
+          "match_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Match Id"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link",
+            "description": "Relative path to the match review screen"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "match_id",
+          "link",
+          "created_at"
+        ],
+        "title": "StaffNotificationRead"
+      },
+      "StaffNotificationStatus": {
+        "type": "string",
+        "enum": [
+          "UNREAD",
+          "READ"
+        ],
+        "title": "StaffNotificationStatus"
       },
       "StationCreate": {
         "properties": {
@@ -16248,6 +17981,43 @@
           "role"
         ],
         "title": "UserCreate"
+      },
+      "UserDirectoryEntry": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "station_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Station Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "full_name",
+          "role",
+          "station_id"
+        ],
+        "title": "UserDirectoryEntry",
+        "description": "Minimal identity for displaying reporter, assignee, and note-author names. No contact fields."
       },
       "UserRead": {
         "properties": {

@@ -146,3 +146,96 @@ runs, or the requesting user for `/generate`. Metric: `kumbh_match_suggestions_t
 - The synonym tables are small and should be extended from real help-desk data during rehearsal events.
 - Weights are expert-set defaults. They have not been calibrated against labelled historical data, because
   none is available in this repository.
+
+---
+
+# Face matching (Phase 2)
+
+Person photographs are analysed with a replaceable pretrained face model. Face suggestions are leads for
+police officers, nothing more. A face candidate never confirms identity and never reunifies anyone.
+
+Code: `backend/app/faces/` (engine, no database access) and `backend/app/services/faces.py` (embeddings,
+comparison, candidates, audit, staff notifications). Default engine: OpenCV YuNet detector + SFace
+recogniser (`FACE_ENGINE=opencv_sface`).
+
+## When face matching runs
+
+| Trigger | How |
+|---|---|
+| Photo becomes downloadable | After malware scan promotes a PHOTO on a missing/found person case (`FACE_MATCHING_ENABLED=true`) |
+| On demand | `POST /api/v1/cases/{id}/matches/generate` also runs face comparison for the case's photos |
+| Backfill | `python -m app.cli face-backfill` |
+
+A face-pipeline failure is logged, counted in `kumbh_face_failures_total`, and never fails the upload.
+
+## Pipeline
+
+1. Decode the photograph. Downscale the longest side to 1280 px.
+2. Detect faces with YuNet. Keep faces at or above `FACE_DETECTION_MIN_SCORE` (default 0.9) and
+   `FACE_MIN_SIZE_PX` (default 40).
+3. Exactly one usable face is required. `NO_FACE`, `MULTIPLE_FACES`, and `UNREADABLE` are stored without
+   an embedding (upload a cropped single-face photo when several faces appear).
+4. Align and embed with SFace (128-d). Encrypt the vector with `FACE_EMBEDDING_ENCRYPTION_KEY` (Fernet).
+5. Compare against FACE_FOUND embeddings on eligible opposite-type cases in the candidate window.
+6. Similarity is the model's own cosine score (`FaceRecognizerSF.match(..., FR_COSINE)`). Only pairs at or
+   above `FACE_SIMILARITY_THRESHOLD` (default 0.363, the published SFace operating point) are stored.
+7. At most `FACE_MAX_CANDIDATES` (default 5) new suggestions are kept, best first. The pair unique constraint
+   on `case_matches` prevents duplicates; an existing PROPOSED rule-based pair is enriched with face fields
+   instead of inserting a second row.
+
+## What is stored
+
+- `face_embeddings`: status, face count, detection score, model name, encrypted embedding (never returned
+  by APIs).
+- `case_matches` with `source = FACE`, `status = PROPOSED`, `face_similarity`, attachment ids, and model.
+- In-app `staff_notifications` for active police officers at both case stations (no SMS/WhatsApp/email).
+
+## Two-person approval for FACE candidates
+
+1. First authorised officer approves via `POST /cases/{id}/matches/{mid}/review` with `decision=CONFIRMED`.
+   The match stays `PROPOSED`; audit action `MATCH_FIRST_APPROVAL`.
+2. A second, different officer must confirm. The same officer is rejected with `separation_of_duties`.
+3. Only then do both cases move to `MATCH_FOUND`. Confirmation never moves a case to `RESOLVED`.
+4. Any one officer may reject while the match is still `PROPOSED`. Rejected pairs are never suggested again.
+
+Manual and rule-based automatic matches keep the existing single confirmer (who must not be the proposer)
+rule.
+
+## Review APIs
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/matches?source=FACE` | Face-candidate review queue |
+| `GET /api/v1/matches/{id}` | Side-by-side case summaries, score, stage, photo references |
+| `GET /api/v1/matches/{id}/photos/{left\|right}` | Presigned URL for a candidate photograph (`match:review`) |
+| `GET /api/v1/matches/{id}/history` | Audit history for the match |
+| `GET /api/v1/staff-notifications` | In-app notifications for the caller |
+| `POST /api/v1/staff-notifications/{id}/read` | Mark notification read |
+
+Embeddings are never included in responses. Audit redacts `embedding` and `embedding_ciphertext`.
+
+## Retention
+
+- Soft-deleting a photograph deletes its embedding in the same transaction.
+- Case anonymisation and attachment-object purge delete embeddings.
+- `purge_face_embeddings` in the maintenance worker removes embeddings for cases that left active status
+  longer than `FACE_EMBEDDING_RETENTION_DAYS` (code default 30; not a legally approved period).
+
+## Models
+
+```bash
+python -m app.cli fetch-face-models
+python -m app.cli fetch-face-fixtures   # public-domain test portraits only
+```
+
+Docker builds download the pinned ONNX files into `FACE_MODEL_DIR`. Swap engines by implementing
+`FaceEngine` and setting `FACE_ENGINE`; case-management APIs do not change.
+
+## Face matching limitations
+
+- The 0.363 threshold is the published SFace cosine operating point. It is not calibrated on real Kumbh
+  photographs (crowds, low light, children, age gaps).
+- Accuracy on infants and children has not been validated.
+- Processing biometric data needs privacy/legal approval (for example under the DPDP Act) before production
+  use. `FACE_EMBEDDING_RETENTION_DAYS` is an operational default only.
+- Rotating `FACE_EMBEDDING_ENCRYPTION_KEY` without a dual-read window loses existing embeddings.

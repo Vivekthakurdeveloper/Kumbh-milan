@@ -24,6 +24,7 @@ Every other `/api/v1` operation requires a bearer access token. Role checks are 
 | Locations | Read and administer reference places |
 | Case types | Create, list, read, and update missing persons, found persons, lost items, and found items; assign and change status; found-item custody |
 | Shared cases | Search, nearby, map, notes, history, contact reveal, attachments, matches, notifications |
+| Mobile sync | `POST /sync/push`, `GET /sync/pull`, `GET /sync/status` (see [MOBILE_SYNC.md](MOBILE_SYNC.md)) |
 | Audit | List audit events |
 | Retention | Policies, plan, approve, execute, cancel, legal holds |
 | Dashboard | Summary counts inside the caller's scope |
@@ -36,5 +37,7 @@ Every other `/api/v1` operation requires a bearer access token. Role checks are 
 - Found-person bodies accept `safeguarding_review_required`.
 - CSV export requires `created_from` and `created_to`, refuses a range over 31 days, and returns at most 1000 rows.
 - MFA routes exist and return `409 mfa_disabled` unless `MFA_MODE=totp`.
+- Case create / note create accept optional offline sync fields (`device_id`, `client_record_id`, …).
+- `PATCH` case update and attachment upload accept `Idempotency-Key`. Attachment upload also accepts sync form fields for durable retries.
 
 OpenAPI security requirements and 401 responses are checked by `test_openapi_documents_every_operation`.

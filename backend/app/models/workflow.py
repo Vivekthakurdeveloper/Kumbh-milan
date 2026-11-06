@@ -94,7 +94,18 @@ class CaseNote(CreatedAtMixin, Base):
             name="correction_requires_target",
         ),
         CheckConstraint("length(btrim(note_text)) > 0", name="note_text_not_blank"),
+        CheckConstraint(
+            "client_record_id IS NULL OR device_id IS NOT NULL", name="ck_case_notes_client_record_requires_device"
+        ),
         Index("ix_case_notes_case_created", "case_id", "created_at"),
+        Index(
+            "uq_case_notes_author_device_client_record",
+            "author_user_id",
+            "device_id",
+            "client_record_id",
+            unique=True,
+            postgresql_where=text("client_record_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -104,6 +115,11 @@ class CaseNote(CreatedAtMixin, Base):
     note_type: Mapped[NoteType] = mapped_column(enum_type(NoteType, "note_type"), nullable=False)
     is_sensitive: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     corrects_note_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    client_id: Mapped[str | None] = mapped_column(String(128))
+    device_id: Mapped[str | None] = mapped_column(String(128))
+    client_record_id: Mapped[str | None] = mapped_column(String(128))
+    client_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    server_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CaseAttachment(CreatedAtMixin, Base):
@@ -114,10 +130,22 @@ class CaseAttachment(CreatedAtMixin, Base):
         CheckConstraint("file_size_bytes > 0", name="file_size_positive"),
         CheckConstraint("checksum_sha256 ~ '^[0-9a-f]{64}$'", name="checksum_format"),
         CheckConstraint("scan_attempts >= 0", name="scan_attempts_non_negative"),
+        CheckConstraint(
+            "client_record_id IS NULL OR device_id IS NOT NULL",
+            name="ck_case_attachments_client_record_requires_device",
+        ),
         Index("ix_case_attachments_case_created", "case_id", "created_at"),
         Index(
             "ix_case_attachments_scan_queue", "next_scan_at",
             postgresql_where=text("scan_status IN ('QUARANTINED', 'SCANNING')"),
+        ),
+        Index(
+            "uq_case_attachments_uploader_device_client_record",
+            "uploaded_by_user_id",
+            "device_id",
+            "client_record_id",
+            unique=True,
+            postgresql_where=text("client_record_id IS NOT NULL"),
         ),
     )
 
@@ -140,6 +168,11 @@ class CaseAttachment(CreatedAtMixin, Base):
     object_purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by_user_id: Mapped[uuid.UUID | None] = _user_fk(nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(128))
+    device_id: Mapped[str | None] = mapped_column(String(128))
+    client_record_id: Mapped[str | None] = mapped_column(String(128))
+    client_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    server_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CaseStatusHistory(CreatedAtMixin, Base):
@@ -198,10 +231,28 @@ class CaseMatch(TimestampMixin, Base):
             "source <> 'AUTOMATIC' OR (score IS NOT NULL AND confidence_band IS NOT NULL AND engine_version IS NOT NULL)",
             name="automatic_matches_are_scored",
         ),
+        CheckConstraint(
+            "source <> 'FACE' OR ("
+            "face_similarity IS NOT NULL AND left_attachment_id IS NOT NULL AND right_attachment_id IS NOT NULL "
+            "AND face_model IS NOT NULL AND score IS NOT NULL)",
+            name="face_matches_are_scored",
+        ),
         CheckConstraint("score IS NULL OR (score >= 0 AND score <= 1)", name="score_range"),
+        CheckConstraint(
+            "face_similarity IS NULL OR (face_similarity >= 0 AND face_similarity <= 1)",
+            name="face_similarity_range",
+        ),
         CheckConstraint(
             "(status = 'REVOKED') = (revoked_at IS NOT NULL AND revoked_by_user_id IS NOT NULL)",
             name="revocation_fields_match_status",
+        ),
+        CheckConstraint(
+            "first_approved_by_user_id IS NULL OR first_approved_by_user_id IS DISTINCT FROM reviewed_by_user_id",
+            name="face_two_person_approval",
+        ),
+        CheckConstraint(
+            "(first_approved_by_user_id IS NULL) = (first_approved_at IS NULL)",
+            name="first_approval_fields_together",
         ),
         Index("ix_case_matches_right_case", "right_case_id"),
         Index("ix_case_matches_status_created", "status", "created_at"),
@@ -226,8 +277,19 @@ class CaseMatch(TimestampMixin, Base):
     confidence_band: Mapped[ConfidenceBand | None] = mapped_column(enum_type(ConfidenceBand, "confidence_band"))
     reasons: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     engine_version: Mapped[str | None] = mapped_column(String(32))
+    left_attachment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("case_attachments.id", ondelete="RESTRICT")
+    )
+    right_attachment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("case_attachments.id", ondelete="RESTRICT")
+    )
+    face_similarity: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    face_model: Mapped[str | None] = mapped_column(String(64))
     proposed_by_user_id: Mapped[uuid.UUID | None] = _user_fk(nullable=True)
     rationale: Mapped[str | None] = mapped_column(Text)
+    first_approved_by_user_id: Mapped[uuid.UUID | None] = _user_fk(nullable=True)
+    first_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_approval_evidence: Mapped[str | None] = mapped_column(Text)
     reviewed_by_user_id: Mapped[uuid.UUID | None] = _user_fk(nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     review_evidence: Mapped[str | None] = mapped_column(Text)

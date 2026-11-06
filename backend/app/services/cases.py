@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 from sqlalchemy import func, select, true
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import AuditAction, record_audit
@@ -12,21 +13,35 @@ from app.auth.permissions import Permission, has_permission, require_permission
 from app.auth.scope import case_visibility_clause
 from app.common.crypto import decrypt_text, encrypt_text
 from app.common.errors import Conflict, Forbidden, NotFound, ValidationFailed
+from app.common.time import utcnow
 from app.config import get_settings
 from app.models import Case, CaseContact, CaseStatusHistory, Location, Station, User
 from app.models.enums import CaseStatus, Role
+from app.observability.metrics import CASES_CREATED, count_after_commit
 from app.repositories import cases as case_repo
 from app.repositories.cases import CaseFilters
 from app.schemas.cases import CaseSummary
-from app.observability.metrics import CASES_CREATED, count_after_commit
 from app.services.access import load_case
 from app.services.case_types import CaseTypeSpec, spec_for
-from app.services.idempotency import run_idempotent
+from app.services.idempotency import run_idempotent, run_idempotent_operation
 
 CASE_NUMBER_TZ = ZoneInfo("Asia/Kolkata")
 POSITION_FIELDS = ("location_id", "latitude", "longitude", "coordinate_source", "coordinate_accuracy_m")
-ENVELOPE_FIELDS = frozenset({"urgency_level", "station_id", "contact_details", *POSITION_FIELDS})
+SYNC_FIELDS = ("client_id", "device_id", "client_record_id", "client_created_at")
+ENVELOPE_FIELDS = frozenset({"urgency_level", "station_id", "contact_details", *POSITION_FIELDS, *SYNC_FIELDS})
 _UNSET = object()
+
+
+def find_case_by_client_record(
+    db: Session, user: User, *, device_id: str, client_record_id: str
+) -> Case | None:
+    return db.scalar(
+        select(Case).where(
+            Case.reported_by_user_id == user.id,
+            Case.device_id == device_id,
+            Case.client_record_id == client_record_id,
+        )
+    )
 
 
 def _detail(case: Case, spec: CaseTypeSpec | None = None):
@@ -129,10 +144,23 @@ def create_case(
     require_permission(user, Permission.CASE_CREATE)
     data = payload.model_dump()
     station_id = _resolve_station(db, user, data.get("station_id"))
+    client_record_id = data.get("client_record_id")
+    device_id = data.get("device_id")
+    if client_record_id is not None:
+        existing = find_case_by_client_record(db, user, device_id=device_id, client_record_id=client_record_id)
+        if existing is not None:
+            if existing.case_type != spec.case_type:
+                raise Conflict(
+                    "client_record_id was already used for a different case type",
+                    code="client_record_reused",
+                    details={"case_id": existing.id, "case_type": existing.case_type},
+                )
+            return load_case(db, user, existing.id, spec=spec), True
 
     def _create() -> uuid.UUID:
         case_number = allocate_case_number(db, spec)
         detail_values = {k: v for k, v in data.items() if k not in ENVELOPE_FIELDS}
+        now = utcnow()
         case = Case(
             id=uuid.uuid4(),
             case_number=case_number,
@@ -141,6 +169,12 @@ def create_case(
             reported_by_user_id=user.id,
             status=CaseStatus.OPEN,
             urgency_level=data.get("urgency_level"),
+            client_id=data.get("client_id"),
+            device_id=device_id,
+            client_record_id=client_record_id,
+            client_created_at=data.get("client_created_at"),
+            server_synced_at=now if client_record_id else None,
+            sync_status="SYNCED" if client_record_id else None,
         )
         _apply_position(db, case, {k: data[k] for k in POSITION_FIELDS if data.get(k) is not None})
         detail = spec.detail_model(case_id=case.id, **detail_values)
@@ -174,13 +208,25 @@ def create_case(
                 "location_id": data.get("location_id"),
                 "coordinates_provided": data.get("latitude") is not None,
                 "coordinate_source": data.get("coordinate_source"),
+                "client_id": data.get("client_id"),
+                "device_id": device_id,
+                "client_record_id": client_record_id,
             },
         )
         return case.id
 
-    case_id, replayed = run_idempotent(
-        db, user=user, key=idempotency_key, endpoint=f"create:{spec.slug}", payload=data, create=_create
-    )
+    try:
+        case_id, replayed = run_idempotent(
+            db, user=user, key=idempotency_key, endpoint=f"create:{spec.slug}", payload=data, create=_create
+        )
+    except IntegrityError:
+        db.rollback()
+        if client_record_id is None:
+            raise
+        existing = find_case_by_client_record(db, user, device_id=device_id, client_record_id=client_record_id)
+        if existing is None:
+            raise
+        return load_case(db, user, existing.id, spec=spec), True
     if not replayed:
         _suggest_matches(case_id)
     db.expire_all()
@@ -192,70 +238,97 @@ def get_case(db: Session, user: User, case_id: uuid.UUID, spec: CaseTypeSpec | N
     return load_case(db, user, case_id, spec=spec)
 
 
-def update_case(db: Session, user: User, spec: CaseTypeSpec, case_id: uuid.UUID, payload: BaseModel) -> Case:
+def update_case(
+    db: Session,
+    user: User,
+    spec: CaseTypeSpec,
+    case_id: uuid.UUID,
+    payload: BaseModel,
+    *,
+    idempotency_key: str | None = None,
+) -> tuple[Case, bool]:
     require_permission(user, Permission.CASE_UPDATE)
-    case = load_case(db, user, case_id, spec=spec, for_update=True)
     data = payload.model_dump(exclude_unset=True)
-    expected = data.pop("expected_version", None)
-    if expected is not None and expected != case.version:
-        raise Conflict(
-            "The case changed since you loaded it; reload and try again", code="case_changed",
-            details={"case_id": case.id, "expected_version": expected, "current_version": case.version},
-        )
-    if case.status in (CaseStatus.CLOSED, CaseStatus.RESOLVED):
-        raise Conflict(
-            f"{case.status.title()} cases cannot be edited; reopen the case first", code="case_closed"
-        )
+    changed_fields_box: list[str] = []
+    position_changed_box: list[bool] = []
 
-    contact = data.pop("contact_details", _UNSET)
-    urgency = data.pop("urgency_level", _UNSET)
-    position_changes = _apply_position(db, case, data)
-    detail = _detail(case, spec)
+    def _update() -> None:
+        case = load_case(db, user, case_id, spec=spec, for_update=True)
+        local = dict(data)
+        expected = local.pop("expected_version", None)
+        if expected is not None and expected != case.version:
+            raise Conflict(
+                "The case changed since you loaded it; reload and try again", code="case_changed",
+                details={"case_id": case.id, "expected_version": expected, "current_version": case.version},
+            )
+        if case.status in (CaseStatus.CLOSED, CaseStatus.RESOLVED):
+            raise Conflict(
+                f"{case.status.title()} cases cannot be edited; reopen the case first", code="case_closed"
+            )
 
-    before: dict[str, Any] = {}
-    after: dict[str, Any] = {}
-    changed_fields = []
-    for name, value in data.items():
-        if getattr(detail, name) != value:
-            setattr(detail, name, value)
-            changed_fields.append(name)
-    if urgency is not _UNSET and urgency != case.urgency_level:
-        before["urgency_level"], after["urgency_level"] = case.urgency_level, urgency
-        case.urgency_level = urgency
-    if contact is not _UNSET:
-        _set_contact(db, case, user, contact)
-        after["contact_details_changed"] = True
+        contact = local.pop("contact_details", _UNSET)
+        urgency = local.pop("urgency_level", _UNSET)
+        for sync_field in SYNC_FIELDS:
+            local.pop(sync_field, None)
+        position_changes = _apply_position(db, case, local)
+        detail = _detail(case, spec)
 
-    if position_changes:
-        # Exact coordinates stay out of the audit trail's before/after; record that they changed and how.
-        for key, (old, new) in position_changes.items():
-            if key in ("latitude", "longitude"):
-                after["coordinates_changed"] = True
-            else:
-                before[key], after[key] = old, new
-    if not (changed_fields or before or after or contact is not _UNSET):
-        return case
-    if changed_fields:
-        for name in ("item_category", "item_name"):
-            if name in changed_fields and getattr(detail, name) is None:
-                raise ValidationFailed(f"{name} cannot be cleared", code="required_field")
-        case.search_text = _build_search_text(case.case_number, spec, detail)
-        after["changed_fields"] = sorted(changed_fields)
-    case.updated_at = func.now()
-    record_audit(
-        db, action=AuditAction.CASE_UPDATED, entity_type="case", entity_id=case.id, actor_user_id=user.id,
-        case=case, before=before or None, after=after,
-    )
-    if contact is not _UNSET:
+        before: dict[str, Any] = {}
+        after: dict[str, Any] = {}
+        changed_fields = []
+        for name, value in local.items():
+            if getattr(detail, name) != value:
+                setattr(detail, name, value)
+                changed_fields.append(name)
+        if urgency is not _UNSET and urgency != case.urgency_level:
+            before["urgency_level"], after["urgency_level"] = case.urgency_level, urgency
+            case.urgency_level = urgency
+        if contact is not _UNSET:
+            _set_contact(db, case, user, contact)
+            after["contact_details_changed"] = True
+
+        if position_changes:
+            for key, (old, new) in position_changes.items():
+                if key in ("latitude", "longitude"):
+                    after["coordinates_changed"] = True
+                else:
+                    before[key], after[key] = old, new
+        if not (changed_fields or before or after or contact is not _UNSET):
+            db.commit()
+            return
+        if changed_fields:
+            for name in ("item_category", "item_name"):
+                if name in changed_fields and getattr(detail, name) is None:
+                    raise ValidationFailed(f"{name} cannot be cleared", code="required_field")
+            case.search_text = _build_search_text(case.case_number, spec, detail)
+            after["changed_fields"] = sorted(changed_fields)
+        case.updated_at = func.now()
         record_audit(
-            db, action=AuditAction.CONTACT_UPDATED, entity_type="case_contact", entity_id=case.id,
-            actor_user_id=user.id, case=case, after={"cleared": contact is None},
+            db, action=AuditAction.CASE_UPDATED, entity_type="case", entity_id=case.id, actor_user_id=user.id,
+            case=case, before=before or None, after=after,
         )
-    db.commit()
-    if changed_fields or position_changes:
+        if contact is not _UNSET:
+            record_audit(
+                db, action=AuditAction.CONTACT_UPDATED, entity_type="case_contact", entity_id=case.id,
+                actor_user_id=user.id, case=case, after={"cleared": contact is None},
+            )
+        db.commit()
+        changed_fields_box[:] = changed_fields
+        position_changed_box[:] = [bool(position_changes)]
+
+    replayed = run_idempotent_operation(
+        db,
+        user=user,
+        key=idempotency_key,
+        endpoint=f"update:{spec.slug}:{case_id}",
+        payload=data,
+        resource_id=case_id,
+        operation=_update,
+    )
+    if not replayed and (changed_fields_box or position_changed_box):
         _suggest_matches(case_id)
     db.expire_all()
-    return load_case(db, user, case_id, spec=spec)
+    return load_case(db, user, case_id, spec=spec), replayed
 
 
 def to_read(db: Session, case: Case, spec: CaseTypeSpec | None = None, contact_ids: set | None = None):
@@ -282,6 +355,14 @@ def list_cases(
 def to_summary(case: Case, *, in_scope: bool) -> CaseSummary:
     spec = spec_for(case.case_type)
     detail = _detail(case, spec)
+    age = getattr(detail, "approximate_age", None) if detail is not None else None
+    age_group = getattr(detail, "age_group", None) if detail is not None else None
+    if detail is not None and hasattr(detail, "gender"):
+        gender = detail.gender
+    elif detail is not None and hasattr(detail, "estimated_gender"):
+        gender = detail.estimated_gender
+    else:
+        gender = None
     return CaseSummary(
         id=case.id,
         case_number=case.case_number,
@@ -292,6 +373,10 @@ def to_summary(case: Case, *, in_scope: bool) -> CaseSummary:
         assigned_to_user_id=case.assigned_to_user_id,
         title=getattr(detail, spec.title_field) if spec.title_field and detail is not None else None,
         location=getattr(detail, spec.location_field) if detail is not None else None,
+        location_id=case.location_id,
+        approximate_age=age,
+        age_group=age_group,
+        gender=gender,
         event_at=getattr(detail, spec.event_time_field) if detail is not None else None,
         version=case.version,
         created_at=case.created_at,

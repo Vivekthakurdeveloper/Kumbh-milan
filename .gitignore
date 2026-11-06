@@ -9,3 +9,6 @@ __pycache__/
 build/
 dist/
 .backups/
+backend/models/faces/
+backend/tests/fixtures/faces/
+!backend/tests/fixtures/faces/.gitkeep

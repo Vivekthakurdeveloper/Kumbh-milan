@@ -82,3 +82,12 @@ class OfficerSummary(ReadModel):
     full_name: str
     police_badge_number: str | None
     station_id: uuid.UUID | None
+
+
+class UserDirectoryEntry(ReadModel):
+    """Minimal identity for displaying reporter, assignee, and note-author names. No contact fields."""
+
+    id: uuid.UUID
+    full_name: str
+    role: Role
+    station_id: uuid.UUID | None

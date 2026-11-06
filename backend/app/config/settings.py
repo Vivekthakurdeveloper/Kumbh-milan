@@ -38,6 +38,12 @@ class Settings(BaseSettings):
 
     case_number_prefix: str = "KSLF"
     idempotency_ttl_hours: int = 24
+    sync_max_batch: int = Field(50, ge=1, le=100, description="Maximum records accepted in one sync push")
+    sync_pull_lag_seconds: int = Field(
+        5,
+        ge=0,
+        description="Pull omits changes newer than this lag so a late-committing transaction is never skipped",
+    )
 
     s3_endpoint_url: str | None = None
     s3_public_endpoint_url: str | None = None
@@ -53,6 +59,23 @@ class Settings(BaseSettings):
     max_request_bytes: int = 30 * 1024 * 1024
 
     matching_auto_enabled: bool = Field(True, description="Suggest matches after a case is registered or edited")
+
+    face_matching_enabled: bool = Field(True, description="Analyse person photos and suggest face-based candidates")
+    face_engine: Literal["opencv_sface"] = "opencv_sface"
+    face_model_dir: str = Field("models/faces", description="Directory holding YuNet and SFace ONNX files")
+    face_similarity_threshold: float = Field(
+        0.363, description="SFace cosine similarity operating point; pairs below this are not stored"
+    )
+    face_max_candidates: int = 5
+    face_candidate_window_days: int = 14
+    face_detection_min_score: float = 0.9
+    face_min_size_px: int = 40
+    face_embedding_encryption_key: str = Field(
+        "", description="Fernet key for facial embeddings; separate from contact encryption"
+    )
+    face_embedding_retention_days: int = Field(
+        30, description="Operational default: delete embeddings for inactive cases after this many days"
+    )
 
     retention_archive_after_days: int = 90
     retention_anonymize_after_days: int = 365
@@ -137,6 +160,10 @@ class Settings(BaseSettings):
                 raise ValueError("JWT_SECRET must be a strong, non-placeholder secret of at least 32 characters")
             if not self.contact_encryption_key:
                 raise ValueError("CONTACT_ENCRYPTION_KEY is required outside local and test environments")
+            if self.face_matching_enabled and not self.face_embedding_encryption_key:
+                raise ValueError(
+                    "FACE_EMBEDDING_ENCRYPTION_KEY is required outside local and test when face matching is enabled"
+                )
             if self.docs_enabled and self.app_env == "production":
                 raise ValueError("DOCS_ENABLED must be false in production")
             if self.rate_limit_backend != "redis" or not self.redis_url:

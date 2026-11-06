@@ -55,7 +55,9 @@ def build_rules(settings: Settings) -> tuple[list[_Rule], Policy]:
         _Rule("POST", re.compile(r"^/api/v1/users/[^/]+/reset-password$"), password),
         _Rule("POST", re.compile(r"^/api/v1/cases/[^/]+/attachments$"), upload),
         _Rule("POST", re.compile(rf"^/api/v1/cases/{case_types}$"), create),
+        _Rule("POST", re.compile(r"^/api/v1/sync/push$"), create),
         _Rule("GET", re.compile(rf"^/api/v1/cases(/{case_types}|/nearby|/map)?$"), search),
+        _Rule("GET", re.compile(r"^/api/v1/sync/pull$"), search),
     ]
     return rules, general
 

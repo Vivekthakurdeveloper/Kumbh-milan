@@ -1,6 +1,6 @@
 # API endpoint catalog
 
-Complete inventory of every HTTP operation in the FastAPI application (`backend/app/main.py`). The list was produced by importing the app and reading its generated OpenAPI document ([openapi.json](./openapi.json)): **61 paths, 81 operations** (79 under `/api/v1`, plus `/health` and `/ready`). One more route, `GET /metrics`, is excluded from the schema and listed separately.
+Complete inventory of every HTTP operation in the FastAPI application (`backend/app/main.py`). The list was produced by importing the app and reading its generated OpenAPI document ([openapi.json](./openapi.json)): **63 paths, 83 operations** (81 under `/api/v1`, plus `/health` and `/ready`). One more route, `GET /metrics`, is excluded from the schema and listed separately.
 
 Detailed request and response contracts are in [API_REQUEST_RESPONSE_REFERENCE.md](./API_REQUEST_RESPONSE_REFERENCE.md).
 
@@ -16,7 +16,7 @@ Detailed request and response contracts are in [API_REQUEST_RESPONSE_REFERENCE.m
 
 | Label | Meaning |
 |---|---|
-| **Implemented — tested** | Code inspected; route present in the generated OpenAPI; exercised by an existing automated test in `backend/tests/` and/or the live HTTP harness `qa/api_smoke.py`, whose last recorded runs passed (`docs/TESTING.md`: 222 passed / 1 skipped; `docs/evidence/QA_LOCAL_RUN.md`: 144/144). **Those database-backed suites were not re-run during this documentation exercise** because the Docker daemon was not running. |
+| **Implemented — tested** | Code inspected; route present in the generated OpenAPI; exercised by an automated test in `backend/tests/` and/or the live HTTP harness `qa/api_smoke.py`. Latest full pytest: `docs/TESTING.md` (233 passed / 3 skipped, 2026-11-05). Earlier HTTP harness: `docs/evidence/QA_LOCAL_RUN.md` (144/144). |
 | **Implemented — no test found** | Code inspected and route present, but no test exercising it was found. |
 | **Partial** | Endpoint exists but does not cover the full product requirement (see the gap register). |
 | **Blocked** | Endpoint exists but its effect depends on an unresolved external dependency. |
@@ -62,6 +62,7 @@ Query: `GET /stations?include_inactive=true` (any role).
 | Method | Path | Purpose / screen | Roles | Success | Main error codes | Status | Handler |
 |---|---|---|---|---|---|---|---|
 | GET | `/api/v1/users/assignable-officers` | Assign-case dialog | Police, Admin | 200 `OfficerSummary[]` | 403 `permission_denied` (help desk), `station_scope` | Implemented — tested | `v1/admin.py:assignable_officers` |
+| GET | `/api/v1/users/directory` | Resolve user ids to display names (case screens) | All roles | 200 `UserDirectoryEntry[]` | 401; 422 when `ids` empty or >100 | Implemented — tested | `v1/admin.py:user_directory` |
 | GET | `/api/v1/users` | User management list | Admin | 200 `Page[UserRead]` | 403 | Implemented — tested | `v1/admin.py:list_users` |
 | POST | `/api/v1/users` | Create user | Admin | 201 `UserRead` | 409 `duplicate`; 422 `station_required`, `invalid_station`, `badge_required`, `weak_password` | Implemented — tested | `v1/admin.py:create_user` |
 | GET | `/api/v1/users/{user_id}` | User detail | Admin | 200 `UserRead` | 404 `user_not_found` | **Implemented — no test found** | `v1/admin.py:get_user` |
@@ -132,13 +133,33 @@ These work for any case type.
 
 That is **19 operations**.
 
-## 8. Audit (`/api/v1/audit-events`)
+## 8. Match review queue (`/api/v1/matches`)
+
+| Method | Path | Purpose / screen | Roles | Success | Errors | Status | Handler |
+|---|---|---|---|---|---|---|---|
+| GET | `/api/v1/matches` | Cross-case match review queue | All roles | 200 `Page[MatchQueueItem]` | 401 | Implemented — tested | `v1/matches.py:list_match_queue` |
+| GET | `/api/v1/matches/{match_id}` | Side-by-side match review detail | All roles with a case in scope | 200 `MatchDetail` | 404 `match_not_found` | Implemented — tested | `get_match` |
+| GET | `/api/v1/matches/{match_id}/photos/{side}` | Presigned URL for candidate photo (`left`/`right`) | Police, Admin (`match:review`) | 200 `MatchPhotoUrl` | 403; 404 | Implemented — tested | `get_match_photo` |
+| GET | `/api/v1/matches/{match_id}/history` | Match audit history | Police, Admin (`match:review`) | 200 `MatchHistoryEvent[]` | 404 | Implemented — tested | `get_match_history` |
+
+Query on list: `status` (default `PROPOSED`), `confidence_band`, `match_domain`, `source` (`MANUAL`/`AUTOMATIC`/`FACE`), `limit`, `offset`. Scoped like dashboard `pending_match_reviews`. Confirm/reject still uses `POST /cases/{id}/matches/{mid}/review`. FACE candidates require two different officers before confirmation. Embeddings are never returned.
+
+## 8b. Staff notifications (`/api/v1/staff-notifications`)
+
+| Method | Path | Purpose / screen | Roles | Success | Errors | Status | Handler |
+|---|---|---|---|---|---|---|---|
+| GET | `/api/v1/staff-notifications` | In-app notifications for the caller | All roles | 200 `Page[StaffNotificationRead]` | 401 | Implemented — tested | `list_notifications` |
+| POST | `/api/v1/staff-notifications/{id}/read` | Mark notification read | Recipient only | 200 `StaffNotificationRead` | 404 | Implemented — tested | `mark_read` |
+
+Query: `status` (`UNREAD`/`READ`), `limit`, `offset`. Each item includes `match_id` and `link` (`/matches/{id}`). No SMS/WhatsApp/email in this phase.
+
+## 9. Audit (`/api/v1/audit-events`)
 
 | Method | Path | Purpose / screen | Roles | Success | Errors | Status | Handler |
 |---|---|---|---|---|---|---|---|
 | GET | `/api/v1/audit-events` | Audit log viewer | Admin | 200 `Page[AuditEventRead]` (newest first) | 403 | Implemented — tested | `v1/audit.py:list_audit_events` |
 
-## 9. Retention and legal holds (Admin only)
+## 10. Retention and legal holds (Admin only)
 
 The whole router depends on `retention:manage`, so non-admins get `403` before validation.
 
@@ -155,41 +176,43 @@ The whole router depends on `retention:manage`, so non-admins get `403` before v
 | POST | `/api/v1/cases/{case_id}/legal-holds` | Place hold | 201 `LegalHoldRead` | 404 | Implemented — tested | `place_hold` |
 | POST | `/api/v1/cases/{case_id}/legal-holds/{hold_id}/release` | Release hold | 200 `LegalHoldRead` | 404 `legal_hold_not_found`; 409 `legal_hold_released` | Implemented — tested | `release_hold` |
 
-## 10. Dashboard and reports
+## 11. Dashboard and reports
 
 | Method | Path | Purpose / screen | Roles | Success | Errors | Status | Handler |
 |---|---|---|---|---|---|---|---|
 | GET | `/api/v1/dashboard/summary` | Home dashboard counts (scoped) | All roles | 200 `DashboardSummary` | 401 | **Partial** (counts only; no breakdowns by location/date, no activity feed) | `v1/dashboard.py:summary` |
 | GET | `/api/v1/reports/cases.csv` | CSV export | All roles (scoped) | 200 `text/csv`, headers `X-Export-Rows`, `X-Export-Truncated` | 422 `invalid_range`, `range_too_large` | **Partial** (one report, ≤31 days, ≤1000 rows, 6 columns) | `v1/reports.py:export_cases` |
 
-## 11. Totals
+## 12. Totals
 
 | Module | Operations |
 |---|---|
 | Operations (`/health`, `/ready`) | 2 |
 | Authentication | 7 |
 | Stations | 3 |
-| Users | 6 |
+| Users | 7 |
 | Locations | 6 |
 | Case-type endpoints | 25 |
 | Shared case operations | 19 |
+| Match review queue | 4 |
+| Staff notifications | 2 |
 | Audit | 1 |
 | Retention and legal holds | 10 |
 | Dashboard | 1 |
 | Reports | 1 |
-| **Total in OpenAPI** | **81** |
+| **Total in OpenAPI** | **88** |
 | `/metrics` (outside OpenAPI) | 1 |
 
-Status counts for the 81 OpenAPI operations: 80 are implemented with recorded test evidence and 1 is implemented with no test found (`GET /users/{user_id}`). Among the 80, three carry an additional functional caveat: `POST /cases/{id}/notifications` is **blocked** for real delivery (no provider), and the dashboard summary and CSV export are **partial** against product requirements. Missing endpoints are listed in [API_GAP_ANALYSIS.md](./API_GAP_ANALYSIS.md).
+Status counts for the 88 OpenAPI operations: Phase 2 adds face-candidate detail, photo URLs, match history, and in-app staff notifications. `POST /cases/{id}/notifications` remains **blocked** for real SMS/WhatsApp delivery (no provider). Missing endpoints are listed in [API_GAP_ANALYSIS.md](./API_GAP_ANALYSIS.md).
 
-## 12. Role → permission matrix (from `backend/app/auth/permissions.py`)
+## 13. Role → permission matrix (from `backend/app/auth/permissions.py`)
 
 `GET /auth/me` returns the caller's permission strings in `permissions`. Use them for UI gating instead of hard-coding roles.
 
 | Permission string | Help desk | Police | Admin | Used by |
 |---|---|---|---|---|
 | `case:create` | ✓ | ✓ | ✓ | Register cases |
-| `case:read` | ✓ | ✓ | ✓ | All case reads, notes, attachments list, history, matches, notifications list, dashboard, CSV |
+| `case:read` | ✓ | ✓ | ✓ | All case reads, notes, attachments list, history, matches, match queue, user directory, notifications list, dashboard, CSV |
 | `case:update` | ✓ | ✓ | ✓ | PATCH case |
 | `case:review` | ✓ | ✓ | ✓ | Status → `UNDER_REVIEW` |
 | `note:create` | ✓ | ✓ | ✓ | Add note |

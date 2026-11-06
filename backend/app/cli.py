@@ -239,7 +239,13 @@ def maintenance_worker(args: argparse.Namespace) -> int:
             purge_expired(argparse.Namespace(login_attempt_days=args.login_attempt_days, session_days=args.session_days))
             with SessionLocal() as db:
                 report = attachment_service.reconcile_objects(db, get_storage(), limit=args.limit)
-            log.info("Object reconciliation", extra={k: report[k] for k in ("checked", "missing_objects")})
+                from app.services import faces as face_service
+
+                purged_faces = face_service.purge_face_embeddings(db)
+            log.info(
+                "Object reconciliation",
+                extra={**{k: report[k] for k in ("checked", "missing_objects")}, "face_embeddings_purged": purged_faces},
+            )
         except Exception as exc:  # noqa: BLE001
             status = "degraded"
             log.warning("Maintenance pass failed", extra={"error": type(exc).__name__})
@@ -263,6 +269,41 @@ def schema_status(_args: argparse.Namespace) -> int:
     current = ",".join(versions) if versions else "missing"
     print(f"expected={EXPECTED_SCHEMA_REVISION} current={current}")
     return 0 if versions == [EXPECTED_SCHEMA_REVISION] else 1
+
+
+def fetch_face_models(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from app.config import get_settings
+    from app.faces.models_fetch import fetch_models
+
+    dest = Path(get_settings().face_model_dir)
+    paths = fetch_models(dest, force=args.force)
+    for path in paths:
+        print(path)
+    return 0
+
+
+def fetch_face_fixtures(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from app.faces.fixtures_fetch import fetch_fixtures_cli
+
+    dest = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "faces"
+    paths = fetch_fixtures_cli(dest, force=args.force)
+    for path in paths:
+        print(path)
+    return 0
+
+
+def face_backfill(args: argparse.Namespace) -> int:
+    from app.services import faces as face_service
+    from app.storage import get_storage
+
+    with SessionLocal() as db:
+        processed, candidates = face_service.backfill(db, get_storage(), limit=args.limit)
+    print(f"Analysed {processed} photos; created {candidates} face candidates")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -320,6 +361,18 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("schema-status", help="Compare the database revision with the revision this build expects")
     p.set_defaults(func=schema_status)
+
+    p = sub.add_parser("fetch-face-models", help="Download pinned YuNet and SFace ONNX models into FACE_MODEL_DIR")
+    p.add_argument("--force", action="store_true", help="Re-download even if files already exist")
+    p.set_defaults(func=fetch_face_models)
+
+    p = sub.add_parser("fetch-face-fixtures", help="Download public-domain face photographs for integration tests")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(func=fetch_face_fixtures)
+
+    p = sub.add_parser("face-backfill", help="Analyse person-case photos that have no face embedding yet")
+    p.add_argument("--limit", type=int, default=500)
+    p.set_defaults(func=face_backfill)
 
     args = parser.parse_args(argv)
     return args.func(args)

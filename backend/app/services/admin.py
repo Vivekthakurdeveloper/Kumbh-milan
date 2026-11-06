@@ -188,3 +188,17 @@ def list_assignable_officers(db: Session, actor: User, station_id: uuid.UUID | N
     if station_id is not None:
         stmt = stmt.where(User.station_id == station_id)
     return list(db.scalars(stmt.order_by(User.full_name, User.id)))
+
+
+def directory_lookup(db: Session, actor: User, ids: list[uuid.UUID]) -> list[User]:
+    """Minimal identity for displaying names on case screens. Available to every authenticated role."""
+    require_permission(actor, Permission.CASE_READ)
+    if not ids:
+        return []
+    # Preserve request order while dropping duplicates and unknown ids.
+    unique: list[uuid.UUID] = list(dict.fromkeys(ids))
+    rows = {
+        u.id: u
+        for u in db.scalars(select(User).where(User.id.in_(unique)))
+    }
+    return [rows[uid] for uid in unique if uid in rows]

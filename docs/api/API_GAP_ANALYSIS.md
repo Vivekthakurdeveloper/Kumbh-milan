@@ -17,63 +17,57 @@ Gap IDs are stable and are cited from the other documents in this folder.
 
 ## 1. Summary
 
-| ID | Feature | Priority | Class | Blocks screen |
-|---|---|---|---|---|
-| G-15 | `language` accepts 200 chars, database stores 100 → server error | **P0** | Mandatory (defect) | Registration, edit (persons) |
-| G-16 | CSV export headers not readable cross-origin | P0 if cross-origin, else none | Mandatory (deployment) | Reports |
-| G-17 | `X-Step-Up-Code` blocked by CORS | P0 if `MFA_MODE=totp` and cross-origin | Mandatory (deployment) | User management, retention |
-| G-1 | Match review queue across cases | P1 | Mandatory | Matching queue, dashboard |
-| G-2 | Claimant / handover record and reunification record | P1 | Mandatory | Reunification, custody |
-| G-3 | Resolve user ids to display names for non-admins | P1 | Mandatory | Case details, lists |
-| G-7 | Custody history visible to case handlers | P1 | Mandatory | Custody, case details |
-| G-9 | Real SMS/WhatsApp delivery to families | P1 (P0 if family messaging is launch scope, Q-4) | Mandatory if in scope | Family notifications |
-| G-14 | `CaseSummary.location_id` always `null` | P1 | Mandatory (defect) | Search, nearby, matching |
-| G-4 | Unassign, team assignment, assign to help desk | P2 | Optional | Assign |
-| G-5 | Reference data: item categories and enums | P2 | Optional | Registration, filters |
-| G-8 | Dashboard breakdowns, trends, activity feed | P2 | Optional | Dashboard |
-| G-10 | More list filters (location_id, sector, custody, reporter) | P2 | Optional | Case lists |
-| G-11 | More sort orders (urgency, event time) | P2 | Optional | Case lists |
-| G-12 | Duplicate-registration detection | P2 | Optional | Registration |
-| G-19 | Staff in-app notifications | P2 | Optional | Staff notifications |
-| G-21 | Additional reports and aggregates | P2 | Optional | Reports |
-| G-6 | Supervisor approval and assignee notification | P3 | Optional | Assign |
-| G-13 | Self-service password reset | P3 | Optional | Login |
-| G-18 | Discoverable MFA mode | P3 | Optional | Profile |
-| G-20 | Realtime updates (SSE/WebSocket) | P3 | Optional | Dashboard, lists |
-| G-22 | Per-case activity timeline for non-admins | P3 | Optional | Case details |
-| G-23 | Photo-based or similarity matching | P3 | Optional | Matching |
-| G-24 | Runtime system settings API | P3 | Optional | System settings |
+| ID | Feature | Priority | Class | Blocks screen | Status |
+|---|---|---|---|---|---|
+| G-15 | `language` accepts 200 chars, database stores 100 → server error | **P0** | Mandatory (defect) | Registration, edit (persons) | **Resolved** (schema max 100) |
+| G-16 | CSV export headers not readable cross-origin | P0 if cross-origin, else none | Mandatory (deployment) | Reports | Open |
+| G-17 | `X-Step-Up-Code` blocked by CORS | P0 if `MFA_MODE=totp` and cross-origin | Mandatory (deployment) | User management, retention | Open |
+| G-1 | Match review queue across cases | P1 | Mandatory | Matching queue, dashboard | **Resolved** (`GET /matches`) |
+| G-2 | Claimant / handover record and reunification record | P1 | Mandatory | Reunification, custody | Open |
+| G-3 | Resolve user ids to display names for non-admins | P1 | Mandatory | Case details, lists | **Resolved** (`GET /users/directory`) |
+| G-7 | Custody history visible to case handlers | P1 | Mandatory | Custody, case details | Open |
+| G-9 | Real SMS/WhatsApp delivery to families | P1 (P0 if family messaging is launch scope, Q-4) | Mandatory if in scope | Family notifications | Open |
+| G-14 | `CaseSummary.location_id` always `null` | P1 | Mandatory (defect) | Search, nearby, matching | **Resolved** (`to_summary` sets it; age/gender also added) |
+| G-4 | Unassign, team assignment, assign to help desk | P2 | Optional | Assign | Open |
+| G-5 | Reference data: item categories and enums | P2 | Optional | Registration, filters | Open |
+| G-8 | Dashboard breakdowns, trends, activity feed | P2 | Optional | Dashboard | Open |
+| G-10 | More list filters (location_id, sector, custody, reporter) | P2 | Optional | Case lists | Open |
+| G-11 | More sort orders (urgency, event time) | P2 | Optional | Case lists | Open |
+| G-12 | Duplicate-registration detection | P2 | Optional | Registration | Open |
+| G-19 | Staff in-app notifications | P2 | Optional | Staff notifications | Open |
+| G-21 | Additional reports and aggregates | P2 | Optional | Reports | Open |
+| G-6 | Supervisor approval and assignee notification | P3 | Optional | Assign | Open |
+| G-13 | Self-service password reset | P3 | Optional | Login | Open |
+| G-18 | Discoverable MFA mode | P3 | Optional | Profile | Open |
+| G-20 | Realtime updates (SSE/WebSocket) | P3 | Optional | Dashboard, lists | Open |
+| G-22 | Per-case activity timeline for non-admins | P3 | Optional | Case details | Open |
+| G-23 | Photo-based or similarity matching | P3 | Optional | Matching | Open |
+| G-24 | Runtime system settings API | P3 | Optional | System settings | Open |
+
+### Resolved in Phase 1 portal backend work
+
+- **G-15:** `language` on missing/found person create/update is now `max_length=100`, matching the database columns. Values of 101–200 characters return `422 validation_failed`.
+- **G-14:** `to_summary` sets `location_id=case.location_id`. `CaseSummary` also includes optional `approximate_age`, `age_group`, and `gender` (from `estimated_gender` for found persons). Redacted counterparts null these fields.
+- **G-1:** `GET /api/v1/matches` returns a paginated review queue (`MatchQueueItem` with `left_case` / `right_case`), scoped like the dashboard `pending_match_reviews` count.
+- **G-3:** `GET /api/v1/users/directory?ids=…` returns `id`, `full_name`, `role`, `station_id` for any role with `case:read`.
 
 ## 2. Defects (found by code inspection, not executed)
 
-### G-15 — `language` length mismatch
+### G-15 — `language` length mismatch — **RESOLVED**
 
 | Field | Detail |
 |---|---|
 | Feature | Person case registration and edit |
-| Required behaviour | Values that pass request validation are stored, or invalid values return `422`. |
-| Current | `MissingPersonCreate/Update` and `FoundPersonCreate/Update` declare `language: ShortText` (max 200, `backend/app/schemas/common.py`). The columns `missing_person_details.language` and `found_person_details.language` are `VARCHAR(100)` (`backend/app/models/case.py`, migration `0001`). A scan of every request schema against every string column found no other mismatch. |
-| Missing | Consistent limits. |
-| Impact | A 101–200 character value passes validation, then PostgreSQL rejects the insert; the generic handler returns `500 internal_error`. Not reproduced at runtime because the database was unavailable. |
-| Suggested impl | Change the schema to `max_length=100` (no migration), or widen the column with a migration. |
-| Priority | **P0** |
-| Dependencies | None |
-| Acceptance criteria | `POST /cases/missing-persons` with a 150-character `language` returns either `201` with the value stored, or `422 validation_failed` with `loc: ["body","language"]`; never `500`. A regression test covers both person types. |
+| Resolution | `language` on missing/found person schemas is now `LanguageText` (`max_length=100`), matching the `VARCHAR(100)` columns. Covered by `test_language_over_100_chars_returns_422`. |
+| Priority | Was **P0** |
 
-Frontend workaround until fixed: limit the input to 100 characters.
-
-### G-14 — `CaseSummary.location_id` never populated
+### G-14 — `CaseSummary.location_id` never populated — **RESOLVED**
 
 | Field | Detail |
 |---|---|
 | Feature | Search results, nearby results, match counterparts |
-| Required behaviour | `location_id` reflects the case's reference location. |
-| Current | `to_summary` (`backend/app/services/cases.py`) does not set `location_id`, so it is always `null` in `GET /cases`, `GET /cases/nearby`, and every `MatchRead.counterpart`. |
-| Missing | Population of the field. |
-| Impact | Lists cannot show the place name or group by location without fetching each case. |
-| Suggested impl | Set `location_id=case.location_id` in `to_summary`; keep it redacted where counterpart redaction already applies. |
-| Priority | P1 |
-| Acceptance criteria | A case created with `location_id` returns the same value in `GET /cases` results; redacted counterparts still return `null`. |
+| Resolution | `to_summary` sets `location_id=case.location_id` and also populates `approximate_age`, `age_group`, and `gender`. Redacted counterparts null these fields. Covered by `test_case_summary_includes_location_id_age_and_gender`. |
+| Priority | Was P1 |
 
 ## 3. Deployment-dependent gaps
 
@@ -100,17 +94,12 @@ Frontend workaround until fixed: limit the input to 100 characters.
 
 ## 4. Mandatory functional gaps
 
-### G-1 — Match review queue
+### G-1 — Match review queue — **RESOLVED**
 
 | Field | Detail |
 |---|---|
-| Required behaviour | Police/admins see all `PROPOSED` matches they can review, sorted by confidence, without opening each case. |
-| Current | `GET /cases/{id}/matches` per case; dashboard has a `pending_match_reviews` **count**. |
-| Missing | A cross-case list endpoint. |
-| Impact | Reviewers would need one request per case (N+1); high-confidence matches of lost children can be missed. |
-| Suggested impl | `GET /matches?status=PROPOSED&confidence_band=HIGH&station_id=&limit=&offset=` returning `Page[MatchRead]`, scoped and redacted exactly like the per-case endpoint. |
-| Priority | P1 |
-| Acceptance criteria | Returns only matches where at least one case is visible to the caller; same redaction as `GET /cases/{id}/matches`; count equals the dashboard value for the same caller. |
+| Resolution | `GET /api/v1/matches` returns `Page[MatchQueueItem]` with `left_case` / `right_case` summaries, scoped like the dashboard count, default `status=PROPOSED`. Covered by Phase 1 portal tests. |
+| Priority | Was P1 |
 
 ### G-2 — Claimant and reunification record
 
@@ -125,17 +114,12 @@ Frontend workaround until fixed: limit the input to 100 characters.
 | Dependencies | Q-3 (mandatory fields), data protection review |
 | Acceptance criteria | Resolving a person case without a handover record returns `422`; the record is audited and visible only to `case:contact_read` holders. |
 
-### G-3 — User display names for non-admins
+### G-3 — User display names for non-admins — **RESOLVED**
 
 | Field | Detail |
 |---|---|
-| Required behaviour | Show who reported, who is assigned, and who wrote a note. |
-| Current | Responses contain user ids only. `GET /users/{id}` is admin-only; `GET /users/assignable-officers` (police/admin) returns officers of one station. Help desk has no way to resolve names. |
-| Missing | Minimal user lookup for all roles. |
-| Impact | Case details show ids instead of names for help desk; police cannot resolve help-desk reporters. |
-| Suggested impl | Either embed `{id, full_name, role}` objects in case/note responses, or add `GET /users/directory?ids=…` returning only `id, full_name, role, station_id` for all roles. |
-| Priority | P1 |
-| Acceptance criteria | A help-desk user can display the assignee's name; no email, phone, or badge is exposed to non-admins. |
+| Resolution | `GET /api/v1/users/directory?ids=…` (1–100 ids) returns `id`, `full_name`, `role`, `station_id` for any role with `case:read`. Covered by `test_user_directory_returns_minimal_fields_for_all_roles`. |
+| Priority | Was P1 |
 
 ### G-7 — Custody history
 
@@ -196,7 +180,7 @@ Frontend workaround until fixed: limit the input to 100 characters.
 | Q-4 | Is SMS/WhatsApp family notification in launch scope, and which provider and DLT templates will be used? |
 | Q-5 | Will the frontend be served from the same origin as the API? |
 | Q-6 | Will production use `MFA_MODE=totp`? |
-| Q-7 | Do help desks need offline registration? No sync API exists. |
+| Q-7 | Offline registration for help desks | Closed in Phase 3: `/api/v1/sync/push|pull|status` — see docs/MOBILE_SYNC.md |
 | Q-8 | Which UI languages are required? Message templates support `en` and `hi` only. |
 | Q-9 | What are the staging and production hostnames? None are defined in the repository. |
 | Q-10 | Is there an official item category taxonomy (needed for G-5)? |

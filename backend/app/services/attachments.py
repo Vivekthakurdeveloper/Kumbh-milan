@@ -55,6 +55,19 @@ def is_downloadable(attachment: CaseAttachment) -> bool:
     return attachment.scan_status == ScanStatus.SKIPPED_DEV and get_settings().app_env in ("local", "test")
 
 
+def find_attachment_by_client_record(
+    db: Session, actor: User, *, device_id: str, client_record_id: str
+) -> CaseAttachment | None:
+    return db.scalar(
+        select(CaseAttachment).where(
+            CaseAttachment.uploaded_by_user_id == actor.id,
+            CaseAttachment.device_id == device_id,
+            CaseAttachment.client_record_id == client_record_id,
+            CaseAttachment.deleted_at.is_(None),
+        )
+    )
+
+
 def upload_attachment(
     db: Session,
     storage: ObjectStorage,
@@ -66,11 +79,22 @@ def upload_attachment(
     filename: str | None,
     declared_content_type: str | None,
     scanner: MalwareScanner,
-) -> CaseAttachment:
+    idempotency_key: str | None = None,
+    client_id: str | None = None,
+    device_id: str | None = None,
+    client_record_id: str | None = None,
+    client_created_at=None,
+) -> tuple[CaseAttachment, bool]:
+    from sqlalchemy.exc import IntegrityError
+
+    from app.services.idempotency import run_idempotent_operation
+
     require_permission(actor, Permission.ATTACHMENT_UPLOAD)
     case = load_case(db, actor, case_id)
     if case.status == CaseStatus.CLOSED:
         raise Conflict("Closed cases do not accept new attachments", code="case_closed")
+    if client_record_id is not None and not device_id:
+        raise ValidationFailed("device_id is required when client_record_id is sent", code="device_id_required")
 
     limit = _max_bytes(media_type)
     data = stream.read(limit + 1)
@@ -91,11 +115,40 @@ def upload_attachment(
         raise UnsupportedMedia("Declared content type does not match the file content", code="content_type_mismatch")
 
     checksum = hashlib.sha256(data).hexdigest()
+    if client_record_id is not None:
+        existing = find_attachment_by_client_record(
+            db, actor, device_id=device_id, client_record_id=client_record_id
+        )
+        if existing is not None:
+            if existing.case_id != case.id:
+                raise Conflict(
+                    "client_record_id was already used for an attachment on a different case",
+                    code="client_record_reused",
+                    details={"attachment_id": existing.id, "case_id": existing.case_id},
+                )
+            if existing.checksum_sha256 != checksum:
+                raise Conflict(
+                    "client_record_id was already used for a different file",
+                    code="client_record_reused",
+                    details={"attachment_id": existing.id, "checksum_sha256": existing.checksum_sha256},
+                )
+            return existing, True
+
     attachment_id = uuid.uuid4()
     key = quarantine_key(case.id, attachment_id)
-    storage.put(key, data, content_type=detected.content_type, checksum_sha256=checksum)
+    fingerprint = {
+        "case_id": str(case.id),
+        "media_type": media_type.value,
+        "checksum_sha256": checksum,
+        "client_record_id": client_record_id,
+        "device_id": device_id,
+    }
+    stored = False
 
-    try:
+    def _store() -> None:
+        nonlocal stored
+        storage.put(key, data, content_type=detected.content_type, checksum_sha256=checksum)
+        stored = True
         attachment = CaseAttachment(
             id=attachment_id,
             case_id=case.id,
@@ -108,19 +161,68 @@ def upload_attachment(
             checksum_sha256=checksum,
             scan_status=ScanStatus.QUARANTINED,
             next_scan_at=utcnow(),
+            client_id=client_id,
+            device_id=device_id,
+            client_record_id=client_record_id,
+            client_created_at=client_created_at,
+            server_synced_at=utcnow() if client_record_id else None,
         )
         db.add(attachment)
         record_audit(
             db, action=AuditAction.ATTACHMENT_UPLOADED, entity_type="case_attachment", entity_id=attachment_id,
             actor_user_id=actor.id, case=case,
-            after={"media_type": media_type, "content_type": detected.content_type, "size": len(data),
-                   "sha256": checksum, "scan_status": ScanStatus.QUARANTINED},
+            after={
+                "media_type": media_type,
+                "content_type": detected.content_type,
+                "size": len(data),
+                "sha256": checksum,
+                "scan_status": ScanStatus.QUARANTINED,
+                "client_record_id": client_record_id,
+                "device_id": device_id,
+            },
         )
         db.commit()
-    except Exception:
+
+    try:
+        replayed = run_idempotent_operation(
+            db,
+            user=actor,
+            key=idempotency_key,
+            endpoint=f"attachment:{case.id}",
+            payload=fingerprint,
+            resource_id=attachment_id,
+            operation=_store,
+        )
+    except IntegrityError:
         db.rollback()
-        storage.delete(key)
+        if stored:
+            storage.delete(key)
+            stored = False
+        if client_record_id is None:
+            raise
+        existing = find_attachment_by_client_record(
+            db, actor, device_id=device_id, client_record_id=client_record_id
+        )
+        if existing is None:
+            raise
+        return existing, True
+    except Exception:
+        if stored:
+            storage.delete(key)
         raise
+
+    if replayed:
+        from app.models import IdempotencyKey
+
+        attachment_id = db.scalar(
+            select(IdempotencyKey.resource_id).where(
+                IdempotencyKey.user_id == actor.id, IdempotencyKey.key == idempotency_key
+            )
+        )
+        attachment = db.get(CaseAttachment, attachment_id)
+        if attachment is None:
+            raise NotFound("Attachment not found", code="attachment_not_found")
+        return attachment, True
 
     process_scan(db, storage, scanner, attachment_id, data=data)
     db.expire_all()
@@ -130,7 +232,7 @@ def upload_attachment(
             "File was rejected by malware scanning and has been deleted", code="malware_detected",
             details={"attachment_id": attachment_id},
         )
-    return attachment
+    return attachment, False
 
 
 def _claim(db: Session, attachment_id: uuid.UUID) -> bool:
@@ -213,6 +315,10 @@ def _promote(db: Session, storage: ObjectStorage, attachment: CaseAttachment, ca
         raise
     storage.delete(source)
     SCAN_OUTCOMES.labels("clean" if status is ScanStatus.CLEAN else "skipped_dev").inc()
+    if attachment.media_type == MediaType.PHOTO:
+        from app.services.faces import run_after_photo
+
+        run_after_photo(attachment.id)
     return status
 
 
@@ -331,6 +437,9 @@ def delete_attachment(db: Session, actor: User, case_id: uuid.UUID, attachment_i
     attachment = _get_attachment(db, case.id, attachment_id, for_update=True)
     attachment.deleted_at = utcnow()
     attachment.deleted_by_user_id = actor.id
+    from app.services.faces import delete_embedding_for_attachment
+
+    delete_embedding_for_attachment(db, attachment, actor=actor, case=case)
     record_audit(
         db, action=AuditAction.ATTACHMENT_DELETED, entity_type="case_attachment", entity_id=attachment.id,
         actor_user_id=actor.id, case=case, reason=reason,

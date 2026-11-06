@@ -122,7 +122,7 @@ All detail fields are optional and nullable **unless marked required**. "Max" is
 | `height_description` | string 1–200 | Free text. |
 | `clothing_description` | string 1–5000 | |
 | `identifying_marks` | string 1–5000 | |
-| `language` | string 1–200 (DB 100) | Single free-text field, not a list. |
+| `language` | string 1–100 | Single free-text field, not a list. Matches the database column. |
 | `last_seen_location` | string 1–500 | Free text. Use `location_id`/coordinates for structured position. |
 | `last_seen_at` | datetime with offset | Not in the future. |
 | `has_disability` | bool | |
@@ -142,7 +142,7 @@ All detail fields are optional and nullable **unless marked required**. "Max" is
 | `found_location` | string 1–500 | |
 | `found_at` | datetime with offset | Not in the future. |
 | `communication_status` | `CommunicationStatus` | |
-| `language` | string 1–200 (DB 100) | |
+| `language` | string 1–100 | Matches the database column. |
 | `has_disability` | bool | |
 | `care_or_assistance_required` | string 1–5000 | |
 | `current_care_location` | string 1–500 | Where the person is now being looked after. |

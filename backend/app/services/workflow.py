@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, or_, select, true
+from sqlalchemy import and_, func, or_, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -13,7 +13,18 @@ from app.auth.scope import case_visibility_clause
 from app.common.errors import Conflict, Forbidden, InvalidTransition, NotFound, ValidationFailed
 from app.common.time import utcnow
 from app.models import AuditEvent, Case, CaseAssignment, CaseMatch, CaseNote, CaseStatusHistory, IdempotencyKey, User
-from app.models.enums import CaseStatus, CaseType, CustodyStatus, MatchDomain, MatchSource, MatchStatus, NoteType, Role
+from app.models.enums import (
+    CaseStatus,
+    CaseType,
+    ConfidenceBand,
+    CustodyStatus,
+    MatchDomain,
+    MatchReviewStage,
+    MatchSource,
+    MatchStatus,
+    NoteType,
+    Role,
+)
 from app.repositories import cases as case_repo
 from app.schemas.workflow import (
     AssignmentRead,
@@ -21,6 +32,7 @@ from app.schemas.workflow import (
     CaseHistory,
     CustodyChangeRequest,
     MatchProposeRequest,
+    MatchQueueItem,
     MatchRead,
     MatchReviewRequest,
     MatchRevokeRequest,
@@ -309,16 +321,51 @@ def list_notes(db: Session, actor: User, case_id: uuid.UUID, *, limit: int, offs
     return list(rows), total
 
 
+def find_note_by_client_record(
+    db: Session, actor: User, *, device_id: str, client_record_id: str
+) -> CaseNote | None:
+    return db.scalar(
+        select(CaseNote).where(
+            CaseNote.author_user_id == actor.id,
+            CaseNote.device_id == device_id,
+            CaseNote.client_record_id == client_record_id,
+        )
+    )
+
+
 def add_note(
     db: Session, actor: User, case_id: uuid.UUID, req: NoteCreate, *, idempotency_key: str | None = None
 ) -> tuple[CaseNote, bool]:
     require_permission(actor, Permission.NOTE_CREATE)
     load_case(db, actor, case_id)
+    if req.client_record_id is not None:
+        existing = find_note_by_client_record(
+            db, actor, device_id=req.device_id, client_record_id=req.client_record_id
+        )
+        if existing is not None:
+            if existing.case_id != case_id:
+                raise Conflict(
+                    "client_record_id was already used for a note on a different case",
+                    code="client_record_reused",
+                    details={"note_id": existing.id, "case_id": existing.case_id},
+                )
+            return existing, True
     note_id = uuid.uuid4()
-    replayed = run_idempotent_operation(
-        db, user=actor, key=idempotency_key, endpoint=f"note:{case_id}", payload=req.model_dump(),
-        resource_id=note_id, operation=lambda: _add_note(db, actor, case_id, req, note_id),
-    )
+    try:
+        replayed = run_idempotent_operation(
+            db, user=actor, key=idempotency_key, endpoint=f"note:{case_id}", payload=req.model_dump(mode="json"),
+            resource_id=note_id, operation=lambda: _add_note(db, actor, case_id, req, note_id),
+        )
+    except IntegrityError:
+        db.rollback()
+        if req.client_record_id is None:
+            raise
+        existing = find_note_by_client_record(
+            db, actor, device_id=req.device_id, client_record_id=req.client_record_id
+        )
+        if existing is None:
+            raise
+        return existing, True
     if replayed:
         note_id = db.scalar(
             select(IdempotencyKey.resource_id).where(
@@ -332,6 +379,8 @@ def add_note(
 
 
 def _add_note(db: Session, actor: User, case_id: uuid.UUID, req: NoteCreate, note_id: uuid.UUID) -> None:
+    from app.common.time import utcnow
+
     case = load_case(db, actor, case_id)
     can_sensitive = has_permission(actor, Permission.NOTE_SENSITIVE)
     if req.is_sensitive and not can_sensitive:
@@ -355,11 +404,23 @@ def _add_note(db: Session, actor: User, case_id: uuid.UUID, req: NoteCreate, not
     note = CaseNote(
         id=note_id, case_id=case.id, author_user_id=actor.id, note_text=req.note_text,
         note_type=req.note_type, is_sensitive=is_sensitive, corrects_note_id=req.corrects_note_id,
+        client_id=req.client_id,
+        device_id=req.device_id,
+        client_record_id=req.client_record_id,
+        client_created_at=req.client_created_at,
+        server_synced_at=utcnow() if req.client_record_id else None,
     )
     db.add(note)
     record_audit(
         db, action=AuditAction.NOTE_ADDED, entity_type="case_note", entity_id=note.id, actor_user_id=actor.id,
-        case=case, after={"note_type": req.note_type, "is_sensitive": is_sensitive, "corrects_note_id": req.corrects_note_id},
+        case=case,
+        after={
+            "note_type": req.note_type,
+            "is_sensitive": is_sensitive,
+            "corrects_note_id": req.corrects_note_id,
+            "client_record_id": req.client_record_id,
+            "device_id": req.device_id,
+        },
     )
     db.commit()
 
@@ -403,12 +464,36 @@ def _safeguarding_review_required(case: Case) -> bool:
     return bool(case.found_person.safeguarding_review_required)
 
 
+def review_stage(match: CaseMatch) -> MatchReviewStage:
+    """Derived review stage. FACE candidates need two different officers before confirmation."""
+    status = MatchStatus(match.status)
+    if status is MatchStatus.CONFIRMED:
+        return MatchReviewStage.CONFIRMED
+    if status is MatchStatus.REJECTED:
+        return MatchReviewStage.REJECTED
+    if status is MatchStatus.REVOKED:
+        return MatchReviewStage.REVOKED
+    if MatchSource(match.source) is MatchSource.FACE and match.first_approved_by_user_id is not None:
+        return MatchReviewStage.AWAITING_SECOND_APPROVAL
+    return MatchReviewStage.AWAITING_FIRST_APPROVAL
+
+
 def _counterpart(actor: User, other: Case, in_scope: bool):
     summary = to_summary(other, in_scope=in_scope)
     if in_scope or has_permission(actor, Permission.CASE_SEARCH_ALL_STATIONS):
         return summary
     # Help-desk staff see that a counterpart exists at another station, not who or where.
-    return summary.model_copy(update={"title": None, "location": None, "event_at": None, "location_id": None})
+    return summary.model_copy(
+        update={
+            "title": None,
+            "location": None,
+            "event_at": None,
+            "location_id": None,
+            "approximate_age": None,
+            "age_group": None,
+            "gender": None,
+        }
+    )
 
 
 def _match_view(db: Session, actor: User, match: CaseMatch, case_id: uuid.UUID) -> MatchRead:
@@ -423,6 +508,7 @@ def _match_view(db: Session, actor: User, match: CaseMatch, case_id: uuid.UUID) 
         match_domain=match.match_domain,
         status=match.status,
         source=match.source,
+        review_stage=review_stage(match),
         score=float(match.score) if can_see_explanation and match.score is not None else None,
         confidence_band=match.confidence_band if can_see_explanation else None,
         reasons=match.reasons if can_see_explanation else None,
@@ -432,8 +518,15 @@ def _match_view(db: Session, actor: User, match: CaseMatch, case_id: uuid.UUID) 
         left_case_version=versions[match.left_case_id],
         right_case_version=versions[match.right_case_id],
         counterpart=_counterpart(actor, other, in_scope),
+        left_attachment_id=match.left_attachment_id if can_see_explanation else None,
+        right_attachment_id=match.right_attachment_id if can_see_explanation else None,
+        face_similarity=float(match.face_similarity) if can_see_explanation and match.face_similarity is not None else None,
+        face_model=match.face_model if can_see_explanation else None,
         proposed_by_user_id=match.proposed_by_user_id,
         rationale=match.rationale if can_see_explanation else None,
+        first_approved_by_user_id=match.first_approved_by_user_id,
+        first_approved_at=match.first_approved_at,
+        first_approval_evidence=match.first_approval_evidence if sensitive else None,
         reviewed_by_user_id=match.reviewed_by_user_id,
         reviewed_at=match.reviewed_at,
         review_evidence=match.review_evidence if sensitive else None,
@@ -453,6 +546,101 @@ def list_matches(db: Session, actor: User, case_id: uuid.UUID) -> list[MatchRead
         .order_by(CaseMatch.score.desc().nulls_last(), CaseMatch.created_at, CaseMatch.id)
     )
     return [_match_view(db, actor, m, case_id) for m in rows]
+
+
+def _queue_item(db: Session, actor: User, match: CaseMatch, left: Case, right: Case) -> MatchQueueItem:
+    visibility = case_visibility_clause(actor)
+    left_in_scope = case_repo.case_exists_in_scope(db, left.id, visibility)
+    right_in_scope = case_repo.case_exists_in_scope(db, right.id, visibility)
+    # Same explanation rule as per-case MatchRead: visible when the counterpart is in scope
+    # or the caller may search across stations.
+    can_see_explanation = (
+        left_in_scope or right_in_scope or has_permission(actor, Permission.CASE_SEARCH_ALL_STATIONS)
+    )
+    sensitive = has_permission(actor, Permission.NOTE_SENSITIVE)
+    return MatchQueueItem(
+        id=match.id,
+        match_domain=match.match_domain,
+        status=match.status,
+        source=match.source,
+        review_stage=review_stage(match),
+        score=float(match.score) if can_see_explanation and match.score is not None else None,
+        confidence_band=match.confidence_band if can_see_explanation else None,
+        reasons=match.reasons if can_see_explanation else None,
+        engine_version=match.engine_version,
+        left_case_id=match.left_case_id,
+        right_case_id=match.right_case_id,
+        left_case_version=left.version,
+        right_case_version=right.version,
+        left_case=_counterpart(actor, left, left_in_scope),
+        right_case=_counterpart(actor, right, right_in_scope),
+        left_attachment_id=match.left_attachment_id if can_see_explanation else None,
+        right_attachment_id=match.right_attachment_id if can_see_explanation else None,
+        face_similarity=float(match.face_similarity) if can_see_explanation and match.face_similarity is not None else None,
+        face_model=match.face_model if can_see_explanation else None,
+        proposed_by_user_id=match.proposed_by_user_id,
+        rationale=match.rationale if can_see_explanation else None,
+        first_approved_by_user_id=match.first_approved_by_user_id,
+        first_approved_at=match.first_approved_at,
+        first_approval_evidence=match.first_approval_evidence if sensitive else None,
+        reviewed_by_user_id=match.reviewed_by_user_id,
+        reviewed_at=match.reviewed_at,
+        review_evidence=match.review_evidence if sensitive else None,
+        revoked_by_user_id=match.revoked_by_user_id,
+        revoked_at=match.revoked_at,
+        revocation_reason=match.revocation_reason if sensitive else None,
+        created_at=match.created_at,
+    )
+
+
+def list_match_queue(
+    db: Session,
+    actor: User,
+    *,
+    status: MatchStatus | None = MatchStatus.PROPOSED,
+    confidence_band: ConfidenceBand | None = None,
+    match_domain: MatchDomain | None = None,
+    source: MatchSource | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[list[MatchQueueItem], int]:
+    """Matches that touch at least one case visible to the caller (same scope as dashboard count)."""
+    require_permission(actor, Permission.CASE_READ)
+    in_scope_ids = select(Case.id).where(case_visibility_clause(actor), Case.archived_at.is_(None))
+    conditions = [
+        or_(CaseMatch.left_case_id.in_(in_scope_ids), CaseMatch.right_case_id.in_(in_scope_ids)),
+    ]
+    if status is not None:
+        conditions.append(CaseMatch.status == status)
+    if confidence_band is not None:
+        conditions.append(CaseMatch.confidence_band == confidence_band)
+    if match_domain is not None:
+        conditions.append(CaseMatch.match_domain == match_domain)
+    if source is not None:
+        conditions.append(CaseMatch.source == source)
+
+    where = and_(*conditions) if len(conditions) > 1 else conditions[0]
+    total = db.scalar(select(func.count()).select_from(CaseMatch).where(where)) or 0
+    rows = list(
+        db.scalars(
+            select(CaseMatch)
+            .where(where)
+            .order_by(CaseMatch.score.desc().nulls_last(), CaseMatch.created_at, CaseMatch.id)
+            .offset(offset)
+            .limit(limit)
+        )
+    )
+    if not rows:
+        return [], total
+
+    case_ids = {cid for m in rows for cid in (m.left_case_id, m.right_case_id)}
+    from app.repositories.cases import _eager_details
+
+    cases = {
+        c.id: c
+        for c in db.scalars(_eager_details(select(Case).where(Case.id.in_(case_ids)))).unique()
+    }
+    return [_queue_item(db, actor, m, cases[m.left_case_id], cases[m.right_case_id]) for m in rows], total
 
 
 def orient_pair(a: Case, b: Case) -> tuple[Case, Case, MatchDomain] | None:
@@ -555,9 +743,43 @@ def _review(db: Session, actor: User, case_id: uuid.UUID, match_id: uuid.UUID, r
     if confirming and match.proposed_by_user_id == actor.id:
         raise Forbidden("A match must be confirmed by someone other than its proposer", code="separation_of_duties")
 
+    # FACE candidates need two different officers. The first approval keeps status PROPOSED.
+    face_first_pass = (
+        confirming
+        and MatchSource(match.source) is MatchSource.FACE
+        and match.first_approved_by_user_id is None
+    )
+    if confirming and MatchSource(match.source) is MatchSource.FACE and match.first_approved_by_user_id == actor.id:
+        raise Forbidden(
+            "A face match must be confirmed by a second authorised officer",
+            code="separation_of_duties",
+        )
+
     cases = _lock_match_cases(db, match)
     check_version(cases[match.left_case_id], req.left_case_version)
     check_version(cases[match.right_case_id], req.right_case_version)
+
+    if face_first_pass:
+        match.first_approved_by_user_id = actor.id
+        match.first_approved_at = utcnow()
+        match.first_approval_evidence = req.evidence
+        for case in cases.values():
+            record_audit(
+                db,
+                action=AuditAction.MATCH_FIRST_APPROVAL,
+                entity_type="case_match",
+                entity_id=match.id,
+                actor_user_id=actor.id,
+                case=case,
+                after={
+                    "decision": MatchStatus.CONFIRMED,
+                    "source": match.source,
+                    "face_similarity": float(match.face_similarity) if match.face_similarity is not None else None,
+                    "review_stage": MatchReviewStage.AWAITING_SECOND_APPROVAL,
+                },
+            )
+        db.commit()
+        return
 
     if confirming:
         blocked = {
@@ -590,7 +812,12 @@ def _review(db: Session, actor: User, case_id: uuid.UUID, match_id: uuid.UUID, r
         record_audit(
             db, action=AuditAction.MATCH_REVIEWED, entity_type="case_match", entity_id=match.id,
             actor_user_id=actor.id, case=case,
-            after={"decision": req.decision, "source": match.source, "score": float(match.score) if match.score is not None else None},
+            after={
+                "decision": req.decision,
+                "source": match.source,
+                "score": float(match.score) if match.score is not None else None,
+                "face_similarity": float(match.face_similarity) if match.face_similarity is not None else None,
+            },
         )
         if confirming:
             _apply_transition(db, case, S.MATCH_FOUND, actor, "Match confirmed by reviewing officer", match_id=match.id)
@@ -633,6 +860,153 @@ def revoke_match(
             _apply_transition(db, case, target, actor, "Confirmed match revoked", match_id=match.id)
     db.commit()
     return _match_view(db, actor, match, case_id)
+
+
+# --- Match review detail (face + rule-based) -----------------------------------------------------
+
+
+def _match_in_scope(db: Session, actor: User, match: CaseMatch) -> bool:
+    """True when at least one side is visible under the caller's station/assignment scope.
+
+    Automatic FACE suggestions do not widen access. CASE_SEARCH_ALL_STATIONS alone is not enough
+    to open another station's candidate photographs.
+    """
+    visibility = case_visibility_clause(actor)
+    return case_repo.case_exists_in_scope(db, match.left_case_id, visibility) or case_repo.case_exists_in_scope(
+        db, match.right_case_id, visibility
+    )
+
+
+def get_match_detail(db: Session, actor: User, match_id: uuid.UUID):
+    from app.config import get_settings
+    from app.schemas.faces import MatchDetail
+
+    require_permission(actor, Permission.CASE_READ)
+    match = db.get(CaseMatch, match_id)
+    if match is None or not _match_in_scope(db, actor, match):
+        raise NotFound("Match not found", code="match_not_found")
+    from app.repositories.cases import _eager_details
+
+    cases = {
+        c.id: c
+        for c in db.scalars(
+            _eager_details(select(Case).where(Case.id.in_((match.left_case_id, match.right_case_id))))
+        ).unique()
+    }
+    left, right = cases[match.left_case_id], cases[match.right_case_id]
+    visibility = case_visibility_clause(actor)
+    left_in_scope = case_repo.case_exists_in_scope(db, left.id, visibility)
+    right_in_scope = case_repo.case_exists_in_scope(db, right.id, visibility)
+    can_see_explanation = left_in_scope or right_in_scope or has_permission(actor, Permission.CASE_SEARCH_ALL_STATIONS)
+    sensitive = has_permission(actor, Permission.NOTE_SENSITIVE)
+    threshold = get_settings().face_similarity_threshold if match.face_similarity is not None else None
+    return MatchDetail(
+        id=match.id,
+        match_domain=match.match_domain,
+        status=match.status,
+        source=match.source,
+        review_stage=review_stage(match),
+        score=float(match.score) if can_see_explanation and match.score is not None else None,
+        confidence_band=match.confidence_band if can_see_explanation else None,
+        reasons=match.reasons if can_see_explanation else None,
+        engine_version=match.engine_version,
+        left_case_id=match.left_case_id,
+        right_case_id=match.right_case_id,
+        left_case_version=left.version,
+        right_case_version=right.version,
+        left_case=_counterpart(actor, left, left_in_scope),
+        right_case=_counterpart(actor, right, right_in_scope),
+        left_attachment_id=match.left_attachment_id if can_see_explanation else None,
+        right_attachment_id=match.right_attachment_id if can_see_explanation else None,
+        face_similarity=float(match.face_similarity) if can_see_explanation and match.face_similarity is not None else None,
+        face_similarity_threshold=threshold if can_see_explanation else None,
+        face_model=match.face_model if can_see_explanation else None,
+        proposed_by_user_id=match.proposed_by_user_id,
+        rationale=match.rationale if can_see_explanation else None,
+        first_approved_by_user_id=match.first_approved_by_user_id,
+        first_approved_at=match.first_approved_at,
+        first_approval_evidence=match.first_approval_evidence if sensitive else None,
+        reviewed_by_user_id=match.reviewed_by_user_id,
+        reviewed_at=match.reviewed_at,
+        review_evidence=match.review_evidence if sensitive else None,
+        revoked_by_user_id=match.revoked_by_user_id,
+        revoked_at=match.revoked_at,
+        revocation_reason=match.revocation_reason if sensitive else None,
+        created_at=match.created_at,
+    )
+
+
+def match_photo_url(db: Session, storage, actor: User, match_id: uuid.UUID, side: str):
+    from app.config import get_settings
+    from app.models import CaseAttachment
+    from app.schemas.faces import MatchPhotoUrl
+    from app.services.attachments import is_downloadable
+
+    require_permission(actor, Permission.MATCH_REVIEW)
+    if side not in ("left", "right"):
+        raise ValidationFailed("side must be left or right", code="invalid_side")
+    match = db.get(CaseMatch, match_id)
+    if match is None or not _match_in_scope(db, actor, match):
+        raise NotFound("Match not found", code="match_not_found")
+    attachment_id = match.left_attachment_id if side == "left" else match.right_attachment_id
+    case_id = match.left_case_id if side == "left" else match.right_case_id
+    if attachment_id is None:
+        raise NotFound("No candidate photograph on this side", code="attachment_not_found")
+    attachment = db.get(CaseAttachment, attachment_id)
+    if attachment is None or attachment.deleted_at is not None or not is_downloadable(attachment):
+        raise NotFound("Candidate photograph is not available", code="attachment_not_available")
+    case = db.get(Case, case_id)
+    ttl = get_settings().s3_presign_ttl_seconds
+    url = storage.presign_get(
+        attachment.storage_key,
+        content_type=attachment.content_type,
+        filename=attachment.original_filename or f"attachment-{attachment.id.hex}",
+        ttl_seconds=ttl,
+    )
+    record_audit(
+        db,
+        action=AuditAction.ATTACHMENT_ACCESSED,
+        entity_type="case_attachment",
+        entity_id=attachment.id,
+        actor_user_id=actor.id,
+        case=case,
+        after={"purpose": "match_review", "match_id": match.id, "side": side},
+    )
+    db.commit()
+    return MatchPhotoUrl(
+        side=side,
+        attachment_id=attachment.id,
+        url=url,
+        expires_in=ttl,
+        content_type=attachment.content_type,
+    )
+
+
+def match_history(db: Session, actor: User, match_id: uuid.UUID):
+    from app.schemas.faces import MatchHistoryEvent
+
+    require_permission(actor, Permission.MATCH_REVIEW)
+    match = db.get(CaseMatch, match_id)
+    if match is None or not _match_in_scope(db, actor, match):
+        raise NotFound("Match not found", code="match_not_found")
+    rows = list(
+        db.scalars(
+            select(AuditEvent)
+            .where(AuditEvent.entity_type == "case_match", AuditEvent.entity_id == match_id)
+            .order_by(AuditEvent.created_at, AuditEvent.id)
+        )
+    )
+    return [
+        MatchHistoryEvent(
+            id=row.id,
+            action=row.action,
+            actor_user_id=row.actor_user_id,
+            after_state=row.after_state,
+            reason=row.reason,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
 
 
 # --- Audit ---------------------------------------------------------------------------------------

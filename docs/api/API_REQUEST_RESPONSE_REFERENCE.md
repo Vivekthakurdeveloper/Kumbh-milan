@@ -277,6 +277,26 @@ Body (all optional): `name`, `location_description`, `is_active`. `code` and `ki
 ]
 ```
 
+### Endpoint: User directory — `GET /api/v1/users/directory`
+
+**Purpose:** resolve reporter, assignee, and note-author ids to display names on case screens. **Roles:** all (`case:read`). **Query:** `ids` (repeatable uuid, 1–100). Unknown ids are omitted. Returns only `id`, `full_name`, `role`, `station_id` — never email, phone, badge, or username.
+
+<!-- validate: list[app.schemas.admin:UserDirectoryEntry] -->
+```json
+[
+  {
+    "id": "9a1e4b7c-2d3f-4a5b-8c6d-7e8f9a0b1c2d",
+    "full_name": "Sample Officer Rawat",
+    "role": "POLICE_OFFICER",
+    "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22"
+  }
+]
+```
+
+Example: `GET /api/v1/users/directory?ids=9a1e4b7c-2d3f-4a5b-8c6d-7e8f9a0b1c2d&ids=aaaa1111-2222-3333-4444-555566667777`
+
+**Status:** Implemented — tested.
+
 ### Endpoint: List users — `GET /api/v1/users` (Admin)
 
 **Query:** `limit`, `offset`, `role` (`Role`), `station_id` (uuid), `is_active` (bool). Ordered by `full_name`. **Success 200:** `Page[UserRead]`.
@@ -832,7 +852,10 @@ Release (handover):
       "assigned_to_user_id": "9a1e4b7c-2d3f-4a5b-8c6d-7e8f9a0b1c2d",
       "title": "Sample Child Name",
       "location": "Near the clock tower, Har Ki Pauri",
-      "location_id": null,
+      "location_id": "a1b2c3d4-1111-2222-3333-444455556666",
+      "approximate_age": 7,
+      "age_group": "CHILD",
+      "gender": "MALE",
       "event_at": "2026-10-29T02:10:00Z",
       "version": 2,
       "created_at": "2026-10-29T02:15:03.512000Z",
@@ -850,7 +873,10 @@ Release (handover):
 |---|---|
 | `title` | Missing person: `person_name`; lost/found item: `item_name`; found person: always `null`. |
 | `location` | Free-text last-seen/found location. |
-| `location_id` | **Always `null`** wherever a `CaseSummary` is returned (search, nearby, match `counterpart`), because `to_summary` never sets it (gap G-14). Use the case detail, or `position` in nearby results. |
+| `location_id` | Reference location from registration (`GET /locations/{id}`). Redacted to `null` on out-of-scope match counterparts. |
+| `approximate_age` | From person details; `null` for item cases. |
+| `age_group` | From person details; `null` for item cases. |
+| `gender` | Missing person: `gender`; found person: `estimated_gender`; item cases: `null`. Redacted on out-of-scope counterparts. |
 | `event_at` | `last_seen_at` / `found_at`. |
 | `in_scope` | `false` only with `all_stations=true` for cases the caller cannot open. Show as read-only; `GET /cases/{id}` will 404. |
 
@@ -1185,7 +1211,10 @@ Each case is resolved separately; resolving one does not resolve its counterpart
       "assigned_to_user_id": null,
       "title": null,
       "location": "Near Malviya Dweep bridge",
-      "location_id": null,
+      "location_id": "a1b2c3d4-1111-2222-3333-444455556666",
+      "approximate_age": 7,
+      "age_group": "CHILD",
+      "gender": "MALE",
       "event_at": "2026-10-29T03:22:00Z",
       "version": 1,
       "created_at": "2026-10-29T03:30:00Z",
@@ -1205,11 +1234,154 @@ Each case is resolved separately; resolving one does not resolve its counterpart
 ]
 ```
 
-**Redaction rules:** if the caller cannot see the counterpart case and lacks `case:search_all_stations` (help desk), `score`, `confidence_band`, `reasons`, `rationale` are `null` and `counterpart.title/location/event_at/location_id` are `null`. `review_evidence` and `revocation_reason` are `null` for help desk. **Frontend:** label scores as "ranking, not proof of identity". **Status:** Implemented — tested.
+**Redaction rules:** if the caller cannot see the counterpart case and lacks `case:search_all_stations` (help desk), `score`, `confidence_band`, `reasons`, `rationale` are `null` and `counterpart.title/location/event_at/location_id/approximate_age/age_group/gender` are `null`. `review_evidence` and `revocation_reason` are `null` for help desk. **Frontend:** label scores as "ranking, not proof of identity". **Status:** Implemented — tested.
+
+### Endpoint: Match review queue — `GET /api/v1/matches`
+
+**Purpose:** cross-case review queue for police and help-desk operators (scoped). **Roles:** all (`case:read`). **Query:** `status` (default `PROPOSED`), `confidence_band`, `match_domain`, `source` (`MANUAL` / `AUTOMATIC` / `FACE`), `limit`, `offset`.
+
+Returns only matches that touch at least one case visible to the caller — the same rule as dashboard `pending_match_reviews`. Each row carries `left_case` and `right_case` summaries (redacted like `counterpart` above) instead of a single counterpart, plus `review_stage`, optional `face_similarity` / attachment ids for face candidates. Confirm or reject via `POST /cases/{id}/matches/{mid}/review`. FACE candidates need two different officers; embeddings are never returned.
+
+<!-- validate: app.schemas.common:Page[app.schemas.workflow:MatchQueueItem] -->
+```json
+{
+  "items": [
+    {
+      "id": "8b7a6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d",
+      "match_domain": "PERSON",
+      "status": "PROPOSED",
+      "source": "MANUAL",
+      "score": null,
+      "confidence_band": null,
+      "reasons": null,
+      "engine_version": null,
+      "left_case_id": "7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11",
+      "right_case_id": "2e9f8a7b-6c5d-4e3f-8a1b-0c9d8e7f6a5b",
+      "left_case_version": 1,
+      "right_case_version": 1,
+      "left_case": {
+        "id": "7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11",
+        "case_number": "KSLF-MP-2026-000042",
+        "case_type": "MISSING_PERSON",
+        "status": "OPEN",
+        "urgency_level": "CRITICAL",
+        "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
+        "assigned_to_user_id": null,
+        "title": "Sample Child Name",
+        "location": "Har Ki Pauri ghat steps",
+        "location_id": null,
+        "approximate_age": 7,
+        "age_group": "CHILD",
+        "gender": "MALE",
+        "event_at": null,
+        "version": 1,
+        "created_at": "2026-10-29T02:15:03.512000Z",
+        "updated_at": "2026-10-29T02:15:03.512000Z",
+        "in_scope": true
+      },
+      "right_case": {
+        "id": "2e9f8a7b-6c5d-4e3f-8a1b-0c9d8e7f6a5b",
+        "case_number": "KSLF-FP-2026-000018",
+        "case_type": "FOUND_PERSON",
+        "status": "OPEN",
+        "urgency_level": null,
+        "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
+        "assigned_to_user_id": null,
+        "title": null,
+        "location": "Brahmakund",
+        "location_id": null,
+        "approximate_age": 7,
+        "age_group": "CHILD",
+        "gender": "MALE",
+        "event_at": null,
+        "version": 1,
+        "created_at": "2026-10-29T03:30:00Z",
+        "updated_at": "2026-10-29T03:30:00Z",
+        "in_scope": true
+      },
+      "proposed_by_user_id": "9a1e4b7c-2d3f-4a5b-8c6d-7e8f9a0b1c2d",
+      "rationale": "Same clothing and age at nearby ghat",
+      "reviewed_by_user_id": null,
+      "reviewed_at": null,
+      "review_evidence": null,
+      "revoked_by_user_id": null,
+      "revoked_at": null,
+      "revocation_reason": null,
+      "created_at": "2026-10-29T03:30:01Z"
+    }
+  ],
+  "total": 1,
+  "limit": 25,
+  "offset": 0
+}
+```
+
+**Status:** Implemented — tested.
+
+### Endpoint: Match review detail — `GET /api/v1/matches/{match_id}`
+
+**Purpose:** side-by-side review for an authorised officer. **Roles:** `case:read` with at least one side in station/assignment scope. **404** `match_not_found` otherwise.
+
+<!-- validate: app.schemas.faces:MatchDetail -->
+```json
+{
+  "id": "8b7a6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d",
+  "match_domain": "PERSON",
+  "status": "PROPOSED",
+  "source": "FACE",
+  "review_stage": "AWAITING_FIRST_APPROVAL",
+  "score": 0.8351,
+  "face_similarity": 0.8351,
+  "face_similarity_threshold": 0.363,
+  "face_model": "opencv_sface_2021dec",
+  "left_case_id": "7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11",
+  "right_case_id": "2e9f8a7b-6c5d-4e3f-8a1b-0c9d8e7f6a5b",
+  "left_attachment_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "right_attachment_id": "ffffffff-0000-1111-2222-333333333333",
+  "left_case": {"id": "7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11", "case_number": "KSLF-MP-2026-000042", "case_type": "MISSING_PERSON", "status": "OPEN", "in_scope": true},
+  "right_case": {"id": "2e9f8a7b-6c5d-4e3f-8a1b-0c9d8e7f6a5b", "case_number": "KSLF-FP-2026-000018", "case_type": "FOUND_PERSON", "status": "OPEN", "in_scope": true},
+  "created_at": "2026-11-05T10:00:00Z"
+}
+```
+
+**Status:** Implemented — tested. Embeddings are never included.
+
+### Endpoint: Candidate photograph URL — `GET /api/v1/matches/{match_id}/photos/{side}`
+
+**Purpose:** short-lived presigned URL for the left or right candidate photograph. **Roles:** `match:review` with a case in scope. **Path:** `side` is `left` or `right`. Audited as `ATTACHMENT_ACCESSED` with `purpose: match_review`.
+
+<!-- validate: app.schemas.faces:MatchPhotoUrl -->
+```json
+{"side": "left", "attachment_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "url": "https://…", "expires_in": 300, "content_type": "image/jpeg"}
+```
+
+**Status:** Implemented — tested.
+
+### Endpoint: Match history — `GET /api/v1/matches/{match_id}/history`
+
+**Purpose:** audit trail for suggestion, first approval, confirmation/rejection. **Roles:** `match:review`.
+
+<!-- validate: list[app.schemas.faces:MatchHistoryEvent] -->
+```json
+[{"id": "…", "action": "MATCH_FIRST_APPROVAL", "actor_user_id": "…", "after_state": {"decision": "CONFIRMED"}, "reason": null, "created_at": "2026-11-05T10:05:00Z"}]
+```
+
+**Status:** Implemented — tested.
+
+### Endpoint: Staff notifications — `GET /api/v1/staff-notifications`
+
+**Purpose:** in-app alerts for the authenticated officer (face candidates). **Roles:** `case:read`. **Query:** `status` (`UNREAD`/`READ`), `limit`, `offset`. No SMS/WhatsApp/email.
+
+<!-- validate: app.schemas.common:Page[app.schemas.faces:StaffNotificationRead] -->
+```json
+{"items": [{"id": "…", "kind": "MATCH_CANDIDATE", "status": "UNREAD", "match_id": "…", "link": "/matches/…", "created_at": "2026-11-05T10:00:01Z", "read_at": null}], "total": 1, "limit": 25, "offset": 0}
+```
+
+Mark read: `POST /api/v1/staff-notifications/{id}/read` → `StaffNotificationRead`. **Status:** Implemented — tested.
 
 ### Endpoint: Run matching now — `POST /api/v1/cases/{case_id}/matches/generate`
 
-**Roles:** all (`match:propose`). **Body:** none. Only for cases in `OPEN`, `UNDER_REVIEW`, `ASSIGNED`, `REOPENED` (`409 case_not_matchable` otherwise). Candidates: counterpart type, matchable status, registered within ±14 days, not already paired; up to 10 new suggestions with score ≥ 0.40.
+**Roles:** all (`match:propose`). **Body:** none. Only for cases in `OPEN`, `UNDER_REVIEW`, `ASSIGNED`, `REOPENED` (`409 case_not_matchable` otherwise). Candidates: counterpart type, matchable status, registered within ±14 days, not already paired; up to 10 new suggestions with score ≥ 0.40. When face matching is enabled, person-case photos are also compared.
 
 <!-- validate: app.schemas.workflow:MatchGenerateResult -->
 ```json

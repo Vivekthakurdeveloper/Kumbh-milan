@@ -288,6 +288,9 @@ def _execute_item(db: Session, storage: ObjectStorage, run: RetentionRun, policy
             db.rollback()
             return False
         attachment, case = row
+        from app.services.faces import delete_embedding_for_attachment
+
+        delete_embedding_for_attachment(db, attachment, actor=None, case=case)
         storage.delete(attachment.storage_key)
         attachment.object_purged_at = utcnow()
         attachment.deleted_at = attachment.deleted_at or utcnow()
@@ -333,6 +336,10 @@ def _anonymise(db: Session, storage: ObjectStorage, run: RetentionRun, case: Cas
     from app.services.notifications import cancel_for_case
 
     cancel_for_case(db, case.id)
+
+    from app.services.faces import delete_embeddings_for_case
+
+    delete_embeddings_for_case(db, case, reason="case_anonymized")
 
     attachments = list(db.scalars(
         select(CaseAttachment).where(CaseAttachment.case_id == case.id, CaseAttachment.object_purged_at.is_(None))

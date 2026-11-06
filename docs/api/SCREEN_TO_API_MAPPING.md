@@ -21,12 +21,12 @@ Roles: **HD** = `HELP_DESK_OPERATOR`, **PO** = `POLICE_OFFICER`, **AD** = `ADMIN
 | 3 | Dashboard | All | Partial |
 | 4 | Case lists (per type) | All | Ready |
 | 5 | Case registration (four forms) | All | Ready |
-| 6 | Case details | All | Partial |
+| 6 | Case details | All | Ready (names via `/users/directory`) |
 | 7 | Edit case | All | Ready |
 | 8 | Assign / reassign | PO, AD | Partial |
 | 9 | Status actions (review, close, resolve, reopen) | All (by permission) | Ready |
 | 10 | Matching: per-case candidates and review | All; review PO, AD | Ready |
-| 11 | Matching: review queue across cases | PO, AD | Partial |
+| 11 | Matching: review queue across cases | PO, AD | Ready |
 | 12 | Reunification / handover | PO, AD | Partial |
 | 13 | Found-item custody | PO, AD | Partial |
 | 14 | Global search | All | Ready |
@@ -39,7 +39,7 @@ Roles: **HD** = `HELP_DESK_OPERATOR`, **PO** = `POLICE_OFFICER`, **AD** = `ADMIN
 | 21 | System settings: stations and locations | AD | Partial |
 | 22 | Retention and legal holds | AD | Ready |
 
-Totals: 10 Ready, 10 Partial, 2 Blocked.
+Totals: 12 Ready, 8 Partial, 2 Blocked.
 
 ## 1. Login
 
@@ -114,10 +114,10 @@ Totals: 10 Ready, 10 Partial, 2 Blocked.
 | APIs | `GET /cases/{id}` (or `/cases/{type}/{id}`), `GET /cases/{id}/history`, `GET /cases/{id}/notes`, `POST /cases/{id}/notes`, `GET /cases/{id}/attachments`, `GET /cases/{id}/attachments/{aid}` (view URL), `DELETE …/attachments/{aid}` (PO/AD), `GET /cases/{id}/matches`, `GET /cases/{id}/notifications`, `POST /cases/{id}/contact/reveal` (PO/AD), `GET /locations/{id}`, `GET /stations` |
 | Actions | View details, timeline, notes (add, correct), media, matches; reveal contact with reason; open the edit, assign, status, custody actions |
 | Form fields | Note: `note_text`, `note_type`, `is_sensitive` (PO/AD), `corrects_note_id` (for CORRECTION). Reveal: `reason_code`, optional `note` (≤200). Delete attachment: `reason` (3–2000). |
-| Data deps | User names for reporter, assignee, note authors (G-3) |
+| Data deps | User names for reporter, assignee, note authors via `GET /users/directory?ids=…` |
 | UI states | 404 "not found or not available to you"; `has_contact_details` controls the reveal button; sensitive notes and evidence fields are `null` for HD |
-| Missing APIs | Non-admins cannot resolve user ids to names (G-3); custody history not visible to non-admins (G-7). |
-| Readiness | **Partial** |
+| Missing APIs | Custody history not visible to non-admins (G-7). |
+| Readiness | **Ready** (core case details); custody history remains a gap |
 
 ## 7. Edit case
 
@@ -175,10 +175,11 @@ Totals: 10 Ready, 10 Partial, 2 Blocked.
 
 | Aspect | Detail |
 |---|---|
-| Roles | PO, AD |
-| APIs | `GET /dashboard/summary` (`pending_match_reviews` count only); workaround: list cases and call `/cases/{id}/matches` for each |
-| Missing APIs | `GET /matches?status=PROPOSED&confidence_band=…` (G-1). The workaround is N+1 calls and should not be used at scale. |
-| Readiness | **Partial** |
+| Roles | All (`case:read`); confirm/reject PO, AD |
+| APIs | `GET /matches?status=PROPOSED&confidence_band=&match_domain=&limit=&offset=` → `Page[MatchQueueItem]`; review via `POST /cases/{id}/matches/{mid}/review`; count via `GET /dashboard/summary` (`pending_match_reviews`) |
+| Actions | Browse proposed matches with both case summaries; open either case; confirm or reject |
+| Missing APIs | — |
+| Readiness | **Ready** |
 
 ## 12. Reunification / handover
 

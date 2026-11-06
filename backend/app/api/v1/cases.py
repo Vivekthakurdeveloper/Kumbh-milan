@@ -57,9 +57,17 @@ IdempotencyKey = Annotated[
 NOT_FOUND = {**AUTHED, **errors(404)}
 
 
-def attachment_read(attachment) -> AttachmentRead:
+def attachment_read(attachment, db=None) -> AttachmentRead:
+    face_status = None
+    if db is not None and attachment.media_type == MediaType.PHOTO:
+        from app.services.faces import face_status_for_attachment
+
+        face_status = face_status_for_attachment(db, attachment.id)
     return AttachmentRead.model_validate(attachment).model_copy(
-        update={"downloadable": attachment_service.is_downloadable(attachment)}
+        update={
+            "downloadable": attachment_service.is_downloadable(attachment),
+            "face_status": face_status,
+        }
     )
 
 
@@ -134,8 +142,18 @@ def build_case_type_router(spec: CaseTypeSpec) -> APIRouter:
         return case_service.to_read(db, case_service.get_case(db, principal.user, case_id, spec), spec)
 
     @router.patch("/{case_id}", response_model=Read, responses=STATE, name=f"update_{spec.relationship}")
-    def update(case_id: uuid.UUID, payload: Update, principal: CurrentPrincipal, db: DbSession):
-        case = case_service.update_case(db, principal.user, spec, case_id, payload)
+    def update(
+        case_id: uuid.UUID,
+        payload: Update,
+        principal: CurrentPrincipal,
+        db: DbSession,
+        response: Response,
+        idempotency_key: IdempotencyKey = None,
+    ):
+        case, replayed = case_service.update_case(
+            db, principal.user, spec, case_id, payload, idempotency_key=idempotency_key
+        )
+        _mark_replay(response, replayed)
         return case_service.to_read(db, case, spec)
 
     @router.post(
@@ -293,7 +311,7 @@ def add_note(
 @shared.get("/{case_id}/attachments", response_model=Page[AttachmentRead], responses=NOT_FOUND)
 def list_attachments(case_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession, page: PageDep):
     rows, total = attachment_service.list_attachments(db, principal.user, case_id, limit=page.limit, offset=page.offset)
-    return Page(items=[attachment_read(a) for a in rows], total=total, limit=page.limit, offset=page.offset)
+    return Page(items=[attachment_read(a, db) for a in rows], total=total, limit=page.limit, offset=page.offset)
 
 
 @shared.post(
@@ -310,19 +328,30 @@ def upload_attachment(
     response: Response,
     media_type: Annotated[MediaType, Form()],
     file: Annotated[UploadFile, File()],
+    idempotency_key: IdempotencyKey = None,
+    client_id: Annotated[str | None, Form()] = None,
+    device_id: Annotated[str | None, Form()] = None,
+    client_record_id: Annotated[str | None, Form()] = None,
+    client_created_at: Annotated[datetime | None, Form()] = None,
 ):
     """
     Files are quarantined and scanned before they can be downloaded. 201: scanned (CLEAN, or SKIPPED_DEV in
     development). 202: the scanner was unavailable; the file stays QUARANTINED and is retried automatically.
     422 malware_detected: the file was infected and has been deleted.
+    Retries are safe with Idempotency-Key or a stable client_record_id (+ device_id).
     """
-    attachment = attachment_service.upload_attachment(
+    attachment, replayed = attachment_service.upload_attachment(
         db, storage, principal.user, case_id, media_type=media_type, stream=file.file,
         filename=file.filename, declared_content_type=file.content_type, scanner=scanner,
+        idempotency_key=idempotency_key, client_id=client_id, device_id=device_id,
+        client_record_id=client_record_id, client_created_at=client_created_at,
     )
-    if attachment.scan_status in (ScanStatus.QUARANTINED, ScanStatus.SCANNING):
+    _mark_replay(response, replayed)
+    if replayed:
+        response.status_code = status.HTTP_200_OK
+    elif attachment.scan_status in (ScanStatus.QUARANTINED, ScanStatus.SCANNING):
         response.status_code = status.HTTP_202_ACCEPTED
-    return attachment_read(attachment)
+    return attachment_read(attachment, db)
 
 
 @shared.get(

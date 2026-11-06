@@ -71,6 +71,17 @@ class Case(TimestampMixin, Base):
         CheckConstraint("(latitude IS NULL) = (coordinate_source IS NULL)", name="coordinates_have_source"),
         CheckConstraint("coordinate_accuracy_m IS NULL OR latitude IS NOT NULL", name="accuracy_needs_coordinates"),
         CheckConstraint("coordinate_accuracy_m IS NULL OR coordinate_accuracy_m BETWEEN 0 AND 100000", name="accuracy_range"),
+        CheckConstraint("client_record_id IS NULL OR device_id IS NOT NULL", name="ck_cases_client_record_requires_device"),
+        CheckConstraint("sync_status IS NULL OR sync_status = 'SYNCED'", name="ck_cases_sync_status"),
+        Index("ix_cases_sync_changed_at_id", "sync_changed_at", "id"),
+        Index(
+            "uq_cases_reporter_device_client_record",
+            "reported_by_user_id",
+            "device_id",
+            "client_record_id",
+            unique=True,
+            postgresql_where=text("client_record_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -105,6 +116,15 @@ class Case(TimestampMixin, Base):
     geo = mapped_column(Geography(), Computed(POINT_EXPRESSION, persisted=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    client_id: Mapped[str | None] = mapped_column(String(128))
+    device_id: Mapped[str | None] = mapped_column(String(128))
+    client_record_id: Mapped[str | None] = mapped_column(String(128))
+    client_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    server_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_status: Mapped[str | None] = mapped_column(String(32))
+    sync_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
 
     __mapper_args__ = {"version_id_col": version}
 

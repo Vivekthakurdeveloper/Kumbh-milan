@@ -153,12 +153,37 @@ class MatchStatus(StrEnum):
 class MatchSource(StrEnum):
     MANUAL = "MANUAL"
     AUTOMATIC = "AUTOMATIC"
+    FACE = "FACE"
 
 
 class ConfidenceBand(StrEnum):
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
+
+
+class FaceStatus(StrEnum):
+    FACE_FOUND = "FACE_FOUND"
+    NO_FACE = "NO_FACE"
+    MULTIPLE_FACES = "MULTIPLE_FACES"
+    UNREADABLE = "UNREADABLE"
+
+
+class StaffNotificationKind(StrEnum):
+    MATCH_CANDIDATE = "MATCH_CANDIDATE"
+
+
+class StaffNotificationStatus(StrEnum):
+    UNREAD = "UNREAD"
+    READ = "READ"
+
+
+class MatchReviewStage(StrEnum):
+    AWAITING_FIRST_APPROVAL = "AWAITING_FIRST_APPROVAL"
+    AWAITING_SECOND_APPROVAL = "AWAITING_SECOND_APPROVAL"
+    CONFIRMED = "CONFIRMED"
+    REJECTED = "REJECTED"
+    REVOKED = "REVOKED"
 
 
 def enum_type(enum_cls: type[StrEnum], name: str) -> SAEnum:

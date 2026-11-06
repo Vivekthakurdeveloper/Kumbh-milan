@@ -8,23 +8,22 @@ How to verify the API contracts described in this folder, what has already been 
 
 | Check | Command | Result | Date |
 |---|---|---|---|
-| OpenAPI generated from source | `APP_ENV=local DOCS_ENABLED=true .venv/bin/python -c "…json.dump(app.openapi(), …)"` (from `backend/`) | 61 paths, 81 operations → [openapi.json](./openapi.json) | 2026-10-29 |
-| Documentation examples validated against backend Pydantic models | `backend/.venv/bin/python docs/api/tools/validate_examples.py` (from repo root) | **55 examples checked, 0 failed** | 2026-10-29 |
+| OpenAPI generated from source | `APP_ENV=local DOCS_ENABLED=true .venv/bin/python -c "…json.dump(app.openapi(), …)"` (from `backend/`) | 63 paths, 83 operations → [openapi.json](./openapi.json) | 2026-11-05 |
+| Documentation examples validated against backend Pydantic models | `backend/.venv/bin/python docs/api/tools/validate_examples.py` (from repo root) | **57 examples checked, 0 failed** | 2026-11-05 |
 | Validator negative check (missing required field, naive datetime, future datetime, invented response field) | ad-hoc script calling the validator functions | All four rejected | 2026-10-29 |
 | Hand-written TypeScript interfaces in the integration guide compared with Pydantic model fields and enum values | ad-hoc script | No missing or extra fields; all enum value sets equal | 2026-10-29 |
-| Schema max lengths vs database column lengths | ad-hoc script over SQLAlchemy metadata | One mismatch: `language` (gap G-15) | 2026-10-29 |
+| Schema max lengths vs database column lengths | ad-hoc script over SQLAlchemy metadata | **No mismatch** (`language` fixed; was gap G-15) | 2026-11-05 |
 | Database-free unit tests | `APP_ENV=test JWT_SECRET=<any 32+ char test value> .venv/bin/python -m pytest --noconftest -q tests/test_matching_engine.py tests/test_ratelimit.py` | **17 passed, 2 skipped** (Redis not reachable) | 2026-10-29 |
+| Full pytest suite (Phase 1 portal gaps) | `backend/.venv/bin/python -m pytest -q --tb=line` | **233 passed, 3 skipped** | 2026-11-05 |
 
-**Not executed in this exercise:** the database-backed pytest suite and the live HTTP harness, because the Docker daemon was not running. No endpoint was called over HTTP. The "Implemented — tested" status in [API_ENDPOINT_CATALOG.md](./API_ENDPOINT_CATALOG.md) relies on the previously recorded runs below.
-
-## 2. Existing test evidence (recorded by the project, not re-run)
+## 2. Existing test evidence
 
 | Suite | Location | Last recorded result | Source |
 |---|---|---|---|
-| pytest (unit, integration, e2e scenarios) | `backend/tests/` (18 test files, 189 test functions; 223 collected cases) | 222 passed, 1 skipped (real ClamAV not configured) | `docs/TESTING.md` |
-| Live HTTP QA harness | `qa/api_smoke.py` | 144/144 checks passed on 2026-10-23, all 81 operations | `docs/evidence/QA_LOCAL_RUN.md` |
+| pytest (unit, integration, e2e, Phase 1 portal) | `backend/tests/` (19 test files) | 233 passed, 3 skipped (Redis ×2, ClamAV ×1) | `docs/TESTING.md`, `docs/evidence/PHASE1_PORTAL.md` |
+| Live HTTP QA harness | `qa/api_smoke.py` | 144/144 checks passed on 2026-10-23 (pre–Phase 1 portal endpoints) | `docs/evidence/QA_LOCAL_RUN.md` |
 
-Test files by area: `test_auth.py`, `test_authorization.py`, `test_cases_api.py`, `test_workflow.py`, `test_match_workflow.py`, `test_matching.py`, `test_matching_engine.py`, `test_media.py`, `test_scanning.py`, `test_geo.py`, `test_notifications.py`, `test_retention.py`, `test_ratelimit.py`, `test_observability.py`, `test_platform.py`, `test_database.py`, `test_phase_completion.py`, `test_e2e_scenarios.py`.
+Test files by area: `test_auth.py`, `test_authorization.py`, `test_cases_api.py`, `test_workflow.py`, `test_match_workflow.py`, `test_matching.py`, `test_matching_engine.py`, `test_media.py`, `test_scanning.py`, `test_geo.py`, `test_notifications.py`, `test_retention.py`, `test_ratelimit.py`, `test_observability.py`, `test_platform.py`, `test_database.py`, `test_phase_completion.py`, `test_phase1_portal.py`, `test_e2e_scenarios.py`.
 
 Recorded as not executed by the project: hosted CI, real ClamAV, real notification provider, load test `load/cases.js`.
 
@@ -93,7 +92,9 @@ curl -s "$API/auth/me" -H "Authorization: Bearer $TOKEN"
 | V-4 | `latitude` without `longitude` | `422` with model-level `msg` |
 | V-5 | Coordinates outside the Mela area | `422 coordinates_out_of_area` |
 | V-6 | `limit=101` | `422` |
-| V-7 | `language` of 150 characters | Currently expected `500` (gap G-15); after the fix `201` or `422` |
+| V-7 | `language` of 150 characters | `422 validation_failed` with `loc` containing `language` |
+| V-9 | `GET /matches` after proposing a match | `200`; `total` equals dashboard `pending_match_reviews` |
+| V-10 | `GET /users/directory?ids=<assignee>&ids=<reporter>` as help desk | `200`; only `id`, `full_name`, `role`, `station_id` |
 | V-8 | Weak password on `POST /users` | `422 weak_password` |
 
 ### 4.3 Authentication and authorization
