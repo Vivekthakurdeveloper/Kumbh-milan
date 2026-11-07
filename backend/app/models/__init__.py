@@ -13,7 +13,7 @@ from app.models.notification import Notification, StaffNotification
 from app.models.operations import WorkerHeartbeat
 from app.models.organization import Station, User
 from app.models.retention import LegalHold, RetentionRun
-from app.models.security import IdempotencyKey, LoginAttempt, RefreshToken
+from app.models.security import IdempotencyKey, LoginAttempt, PasswordResetToken, RefreshToken
 from app.models.sync import SyncDevice
 from app.models.workflow import (
     CaseAssignment,
@@ -44,6 +44,7 @@ __all__ = [
     "LostItemDetails",
     "MissingPersonDetails",
     "Notification",
+    "PasswordResetToken",
     "RefreshToken",
     "RetentionRun",
     "StaffNotification",

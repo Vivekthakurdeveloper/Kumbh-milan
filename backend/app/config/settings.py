@@ -1,10 +1,17 @@
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PLACEHOLDER_MARKERS = ("change-me", "changeme", "placeholder", "example")
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")  # noqa: S104 - denylist, not a bind address
+
+
+def _is_loopback_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host in LOOPBACK_HOSTS or host.endswith(".localhost")
 
 
 class Settings(BaseSettings):
@@ -53,6 +60,21 @@ class Settings(BaseSettings):
     s3_secret_access_key: str | None = None
     s3_server_side_encryption: str = ""
     s3_presign_ttl_seconds: int = 300
+    media_delivery: Literal["auto", "presigned", "proxy"] = Field(
+        "auto",
+        description=(
+            "How browsers fetch private photos and recordings. presigned: direct links to the object store (needs a "
+            "host the browser can reach). proxy: short-lived links served by this API. auto: presigned when "
+            "S3_PUBLIC_ENDPOINT_URL is set or the store is AWS S3 (no S3_ENDPOINT_URL), otherwise proxy."
+        ),
+    )
+    api_public_base_url: str | None = Field(
+        None,
+        description=(
+            "Public origin of this API (https://api.example.org), used to build proxy media links. "
+            "Falls back to the origin of the incoming request, which is wrong behind a reverse proxy."
+        ),
+    )
 
     max_photo_bytes: int = 10 * 1024 * 1024
     max_audio_bytes: int = 25 * 1024 * 1024
@@ -138,13 +160,44 @@ class Settings(BaseSettings):
         description="When true, readiness fails unless scan, notification, cleanup, and retention workers have fresh heartbeats.",
     )
     worker_heartbeat_max_age_seconds: int = 180
+    password_reset_code_length: int = Field(8, ge=6, le=12, description="Digits in the emailed or texted reset code")
+    password_reset_ttl_minutes: int = Field(15, ge=5, le=60)
+    password_reset_max_attempts: int = Field(5, ge=1, le=10, description="Wrong codes before a reset code is burned")
+    password_reset_max_requests_per_hour: int = Field(
+        3, ge=1, le=20, description="Codes sent per account per hour; further requests are accepted but not sent"
+    )
+    email_provider: Literal["disabled", "console", "mock", "smtp"] = Field(
+        "disabled",
+        description="smtp sends real email. console or mock are local only. disabled turns email delivery off.",
+    )
+    email_from: str = Field("Kumbh Setu <no-reply@localhost>", description="From header for outgoing email")
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_security: Literal["starttls", "ssl", "none"] = Field(
+        "starttls", description="none is only for a local relay such as MailHog"
+    )
+    smtp_timeout_seconds: float = 10.0
+    rate_limit_forgot_password_per_hour: int = 10
+    rate_limit_reset_password_per_hour: int = 20
     mfa_mode: Literal["disabled", "totp"] = Field(
         "disabled",
         description="totp is an optional step-up factor. It is not phishing-resistant and is not a production approval.",
     )
 
+    @property
+    def media_mode(self) -> Literal["presigned", "proxy"]:
+        if self.media_delivery != "auto":
+            return self.media_delivery
+        if self.s3_public_endpoint_url or not self.s3_endpoint_url:
+            return "presigned"
+        return "proxy"
+
     @model_validator(mode="after")
     def _validate_production_secrets(self) -> "Settings":
+        if self.email_provider == "smtp" and not self.smtp_host:
+            raise ValueError("EMAIL_PROVIDER=smtp requires SMTP_HOST")
         if self.scan_mode is None:
             self.scan_mode = "clamav" if self.clamav_host else "disabled"
         if self.scan_mode == "clamav" and not self.clamav_host:
@@ -172,6 +225,20 @@ class Settings(BaseSettings):
                 raise ValueError("METRICS_TOKEN (24+ characters) is required to protect /metrics")
             if "*" in self.cors_origins:
                 raise ValueError("CORS_ORIGINS must list explicit origins outside local development")
+            if self.email_provider in ("console", "mock"):
+                raise ValueError("EMAIL_PROVIDER must be smtp or disabled outside local and test")
+            if self.media_mode == "presigned":
+                if self.s3_endpoint_url and not self.s3_public_endpoint_url:
+                    raise ValueError("MEDIA_DELIVERY=presigned with S3_ENDPOINT_URL requires S3_PUBLIC_ENDPOINT_URL")
+                if self.s3_public_endpoint_url and _is_loopback_url(self.s3_public_endpoint_url):
+                    raise ValueError("S3_PUBLIC_ENDPOINT_URL must be a host browsers can reach, not localhost")
+            if self.media_mode == "proxy" and not self.api_public_base_url:
+                raise ValueError(
+                    "API_PUBLIC_BASE_URL is required when media links are served by the API "
+                    "(MEDIA_DELIVERY=proxy, or S3_ENDPOINT_URL set without S3_PUBLIC_ENDPOINT_URL)"
+                )
+            if self.api_public_base_url and _is_loopback_url(self.api_public_base_url):
+                raise ValueError("API_PUBLIC_BASE_URL must be a host browsers can reach, not localhost")
         return self
 
 

@@ -37,7 +37,7 @@ Gap IDs are stable and are cited from the other documents in this folder.
 | G-19 | Staff in-app notifications | P2 | Optional | Staff notifications | Open |
 | G-21 | Additional reports and aggregates | P2 | Optional | Reports | Open |
 | G-6 | Supervisor approval and assignee notification | P3 | Optional | Assign | Open |
-| G-13 | Self-service password reset | P3 | Optional | Login | Open |
+| G-13 | Self-service password reset | P3 | Optional | Login | **Resolved** (`POST /auth/forgot-password`, `POST /auth/reset-password`; email via SMTP, SMS needs a provider) |
 | G-18 | Discoverable MFA mode | P3 | Optional | Profile | Open |
 | G-20 | Realtime updates (SSE/WebSocket) | P3 | Optional | Dashboard, lists | Open |
 | G-22 | Per-case activity timeline for non-admins | P3 | Optional | Case details | Open |
@@ -155,7 +155,7 @@ Gap IDs are stable and are cited from the other documents in this folder.
 | G-10 | Filters | Filters listed in [API_REQUEST_RESPONSE_REFERENCE.md §6.4](./API_REQUEST_RESPONSE_REFERENCE.md). | `location_id`, `sector_id`, `custody_status`, `reported_by_user_id`, `has_contact_details`. | Each filter narrows `total` correctly and respects scope. |
 | G-11 | Sorting | `created_at`, `updated_at` only. | `-urgency_level`, `event_at`. | Critical cases first with `sort=-urgency_level`. |
 | G-12 | Duplicate detection | Only `Idempotency-Key` prevents double submit by the same user. Automatic matching never compares two cases of the same type. | Same-type similarity check on create returning `possible_duplicates`. | Registering the same lost child twice at two desks surfaces the first case. |
-| G-13 | Self-service password reset | Admin reset only. | Out-of-band reset (requires verified email/phone). | — |
+| G-13 | Self-service password reset | Resolved: emailed or texted one-time code, see the reference. | — | — |
 | G-18 | MFA discovery | Client learns via `409 mfa_disabled`. | `mfa_mode` and `mfa_enabled` in `GET /auth/me`. | — |
 | G-19 | Staff notifications | None. | Notification feed per user, unread count. | — |
 | G-20 | Realtime | Polling only. | SSE/WebSocket for case changes and new matches. | — |

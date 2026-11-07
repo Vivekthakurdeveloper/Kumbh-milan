@@ -405,6 +405,113 @@
         ]
       }
     },
+    "/api/v1/auth/forgot-password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Forgot Password",
+        "description": "Email or text a one-time reset code. No sign-in needed. The answer is the same whether or not the account\nexists, and the message is sent after the response, so neither content nor timing reveals which accounts\nare real. Finish with POST /auth/reset-password. Returns 503 `password_reset_unavailable` only when the\ndeployment has neither email nor SMS delivery configured. Limited per IP and per account.",
+        "operationId": "forgot_password_api_v1_auth_forgot_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgotPasswordResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable or not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/reset-password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Reset Password",
+        "description": "Set a new password using the code from POST /auth/forgot-password. Every session is revoked, so sign in\nagain afterwards. A wrong, expired, or used code is `422 invalid_reset_code`; five wrong guesses burn the\ncode. A weak password is `422 weak_password` and does not use up the code. Not the admin route\nPOST /users/{id}/reset-password.",
+        "operationId": "reset_password_api_v1_auth_reset_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/stations": {
       "get": {
         "tags": [
@@ -2594,6 +2701,24 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-generated key (8-128 chars) that makes retries safe",
+              "title": "Idempotency-Key"
+            },
+            "description": "Client-generated key (8-128 chars) that makes retries safe"
           }
         ],
         "requestBody": {
@@ -3538,6 +3663,24 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-generated key (8-128 chars) that makes retries safe",
+              "title": "Idempotency-Key"
+            },
+            "description": "Client-generated key (8-128 chars) that makes retries safe"
           }
         ],
         "requestBody": {
@@ -4482,6 +4625,24 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-generated key (8-128 chars) that makes retries safe",
+              "title": "Idempotency-Key"
+            },
+            "description": "Client-generated key (8-128 chars) that makes retries safe"
           }
         ],
         "requestBody": {
@@ -5426,6 +5587,24 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-generated key (8-128 chars) that makes retries safe",
+              "title": "Idempotency-Key"
+            },
+            "description": "Client-generated key (8-128 chars) that makes retries safe"
           }
         ],
         "requestBody": {
@@ -7187,7 +7366,7 @@
           "Case operations"
         ],
         "summary": "Upload a photo (JPEG/PNG/WEBP) or voice recording (WAV/MP3/M4A/OGG/WEBM)",
-        "description": "Files are quarantined and scanned before they can be downloaded. 201: scanned (CLEAN, or SKIPPED_DEV in\ndevelopment). 202: the scanner was unavailable; the file stays QUARANTINED and is retried automatically.\n422 malware_detected: the file was infected and has been deleted.",
+        "description": "Files are quarantined and scanned before they can be downloaded. 201: scanned (CLEAN, or SKIPPED_DEV in\ndevelopment). 202: the scanner was unavailable; the file stays QUARANTINED and is retried automatically.\n422 malware_detected: the file was infected and has been deleted.\nRetries are safe with Idempotency-Key or a stable client_record_id (+ device_id).",
         "operationId": "upload_attachment_api_v1_cases__case_id__attachments_post",
         "security": [
           {
@@ -7204,6 +7383,24 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-generated key (8-128 chars) that makes retries safe",
+              "title": "Idempotency-Key"
+            },
+            "description": "Client-generated key (8-128 chars) that makes retries safe"
           }
         ],
         "requestBody": {
@@ -8637,7 +8834,8 @@
         "tags": [
           "Matches"
         ],
-        "summary": "Presigned URL for a candidate photograph on a match",
+        "summary": "Short-lived, browser-reachable URL for a candidate photograph on a match",
+        "description": "The `url` is built for the browser: on the object store's public host when S3_PUBLIC_ENDPOINT_URL is\nconfigured, otherwise on this API (`/api/v1/media/{token}`). It is never an internal hostname. Use it\ndirectly as `<img src>`; it expires after `expires_in` seconds, so fetch a new one rather than caching it.\nThe response carries no similarity score.",
         "operationId": "get_match_photo_api_v1_matches__match_id__photos__side__get",
         "security": [
           {
@@ -8818,6 +9016,97 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/media/{token}": {
+      "get": {
+        "tags": [
+          "Media"
+        ],
+        "summary": "Fetch a file through a short-lived signed link",
+        "description": "No Authorization header is needed, so the URL can be used directly as an `<img src>` or `<audio src>`.\nLinks come from GET /matches/{id}/photos/{side} and GET /cases/{id}/attachments/{aid}, last\nS3_PRESIGN_TTL_SECONDS (default 300), and stop working when the user's sessions are revoked.",
+        "operationId": "get_media_api_v1_media__token__get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {}
+            }
+          },
+          "206": {
+            "description": "Part of the file"
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The link has expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Requested range is not satisfiable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -9010,6 +9299,372 @@
           },
           "404": {
             "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/push": {
+      "post": {
+        "tags": [
+          "Mobile sync"
+        ],
+        "summary": "Push offline-created or offline-updated records",
+        "description": "Process up to SYNC_MAX_BATCH records independently. Each record returns SYNCED, DUPLICATE,\nCONFLICT, or FAILED. HTTP 200 is returned even when some records fail so the client can\nreconcile per record. Station scope and RBAC match the normal case APIs.",
+        "operationId": "push_api_v1_sync_push_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional batch key; per-record client_record_id is the durable guard",
+              "title": "Idempotency-Key"
+            },
+            "description": "Optional batch key; per-record client_record_id is the durable guard"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPushRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncPushResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/pull": {
+      "get": {
+        "tags": [
+          "Mobile sync"
+        ],
+        "summary": "Download cases updated after a sync cursor",
+        "description": "Keyset pagination on (sync_changed_at, id). Results are limited to cases the caller may see.\nA changed server_updated_at means notes or attachments may have changed; fetch those with the\nexisting case endpoints. Recent writes may be withheld for SYNC_PULL_LAG_SECONDS.",
+        "operationId": "pull_api_v1_sync_pull_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncPullResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/status": {
+      "get": {
+        "tags": [
+          "Mobile sync"
+        ],
+        "summary": "Report last sync times and the current server cursor",
+        "description": "pending_count and failed_count are stored as reported by the client; the server never invents them.",
+        "operationId": "status_api_v1_sync_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "pending_count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pending Count"
+            }
+          },
+          {
+            "name": "failed_count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Failed Count"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
             "content": {
               "application/json": {
                 "schema": {
@@ -10177,7 +10832,61 @@
           "Dashboard"
         ],
         "summary": "Counts for the console home screen",
+        "description": "Pass `from` and `to` for the Today / 7 days / 30 days selector: urgent_active, unassigned_active,\nregistered_today and pending_match_reviews then count only cases registered (and matches proposed) inside the\nwindow. Today is `from=<today>&to=<today>`; 7 days is `from=<today-6>&to=<today>`. Either bound may be\nomitted; the window may not exceed 366 days. Without either, the original all-time behaviour is unchanged.",
         "operationId": "summary_api_v1_dashboard_summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 40
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Start of the reporting window (inclusive). ISO 8601 date (whole Asia/Kolkata day) or datetime; a datetime without an offset is Asia/Kolkata time.",
+              "examples": [
+                "2026-11-06",
+                "2026-11-06T00:00:00+05:30"
+              ],
+              "title": "From"
+            },
+            "description": "Start of the reporting window (inclusive). ISO 8601 date (whole Asia/Kolkata day) or datetime; a datetime without an offset is Asia/Kolkata time."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 40
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "End of the reporting window (inclusive). A date means the end of that Asia/Kolkata day.",
+              "examples": [
+                "2026-11-06",
+                "2026-11-06T18:00:00+05:30"
+              ],
+              "title": "To"
+            },
+            "description": "End of the reporting window (inclusive). A date means the end of that Asia/Kolkata day."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -10229,12 +10938,7 @@
               }
             }
           }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
+        }
       }
     },
     "/api/v1/reports/cases.csv": {
@@ -10726,6 +11430,51 @@
             "type": "string",
             "format": "binary",
             "title": "File"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At"
           }
         },
         "type": "object",
@@ -11216,6 +11965,32 @@
             "format": "date-time",
             "title": "Generated At"
           },
+          "period_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period From",
+            "description": "Start of the applied window; null when no window was requested"
+          },
+          "period_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period To",
+            "description": "End of the applied window; null when open-ended or not requested"
+          },
           "active_by_type": {
             "additionalProperties": {
               "type": "integer"
@@ -11238,21 +12013,22 @@
           "urgent_active": {
             "type": "integer",
             "title": "Urgent Active",
-            "description": "Active cases with CRITICAL or HIGH urgency"
+            "description": "Active cases with CRITICAL or HIGH urgency; with a window, only those registered in it"
           },
           "unassigned_active": {
             "type": "integer",
-            "title": "Unassigned Active"
+            "title": "Unassigned Active",
+            "description": "Active unassigned cases; with a window, only those registered in it"
           },
           "registered_today": {
             "type": "integer",
             "title": "Registered Today",
-            "description": "Since midnight Asia/Kolkata"
+            "description": "Cases registered since midnight Asia/Kolkata; with a window, cases registered inside it"
           },
           "pending_match_reviews": {
             "type": "integer",
             "title": "Pending Match Reviews",
-            "description": "PROPOSED matches (manual or automatic) touching visible cases"
+            "description": "PROPOSED matches (manual or automatic) touching visible cases; with a window, proposed inside it"
           },
           "attachments_awaiting_scan": {
             "type": "integer",
@@ -11277,7 +12053,7 @@
           "notifications_failed"
         ],
         "title": "DashboardSummary",
-        "description": "Counts cover only cases the caller may see, excluding archived cases."
+        "description": "Counts cover only cases the caller may see, excluding archived cases.\n\nWith `from` and/or `to`, urgent_active, unassigned_active, registered_today and pending_match_reviews are\nlimited to cases registered (and matches proposed) inside that window; period_from and period_to echo it."
       },
       "ErrorBody": {
         "properties": {
@@ -11332,6 +12108,66 @@
           "UNREADABLE"
         ],
         "title": "FaceStatus"
+      },
+      "ForgotPasswordRequest": {
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Identifier",
+            "description": "Username, email address, or mobile number on the account"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "EMAIL",
+                  "SMS"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel",
+            "description": "Where to send the code. Omit to use the one matching the identifier: an email address gets email, a mobile number gets SMS, and a username gets email, or SMS when the account has no email."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "identifier"
+        ],
+        "title": "ForgotPasswordRequest"
+      },
+      "ForgotPasswordResponse": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Always the same text, whether or not an account matched, so accounts cannot be discovered"
+          },
+          "code_length": {
+            "type": "integer",
+            "title": "Code Length",
+            "description": "Digits in the code the user will receive"
+          },
+          "expires_in_minutes": {
+            "type": "integer",
+            "title": "Expires In Minutes",
+            "description": "How long the code stays valid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message",
+          "code_length",
+          "expires_in_minutes"
+        ],
+        "title": "ForgotPasswordResponse"
       },
       "FoundItemCaseRead": {
         "properties": {
@@ -11495,6 +12331,11 @@
             "title": "Anonymized At",
             "description": "Personal details were removed by an approved retention run"
           },
+          "in_scope": {
+            "type": "boolean",
+            "title": "In Scope",
+            "description": "Same meaning as on the case list: false marks a case the caller may see only as a read-only summary. A case outside the caller's scope is never returned by this endpoint (it is a 404), so a 200 always carries true; clients should still key read-only behaviour off this field."
+          },
           "details": {
             "$ref": "#/components/schemas/FoundItemDetailsRead"
           }
@@ -11514,6 +12355,7 @@
           "created_at",
           "updated_at",
           "closed_at",
+          "in_scope",
           "details"
         ],
         "title": "FoundItemCaseRead"
@@ -11698,6 +12540,61 @@
             ],
             "title": "Contact Details",
             "description": "Owner or family contact details. Write-only: encrypted at rest and never returned by case endpoints. Police and admins read it through POST /cases/{id}/contact/reveal, which is audited."
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id",
+            "description": "Optional app-instance id for offline sync"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id",
+            "description": "Required with client_record_id; identifies the device that created the record offline"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id",
+            "description": "Stable client-generated id; retries with the same id return the original case"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At",
+            "description": "When the record was created on the device (UTC)"
           }
         },
         "additionalProperties": false,
@@ -12180,6 +13077,11 @@
             "title": "Anonymized At",
             "description": "Personal details were removed by an approved retention run"
           },
+          "in_scope": {
+            "type": "boolean",
+            "title": "In Scope",
+            "description": "Same meaning as on the case list: false marks a case the caller may see only as a read-only summary. A case outside the caller's scope is never returned by this endpoint (it is a 404), so a 200 always carries true; clients should still key read-only behaviour off this field."
+          },
           "details": {
             "$ref": "#/components/schemas/FoundPersonDetailsRead"
           }
@@ -12199,6 +13101,7 @@
           "created_at",
           "updated_at",
           "closed_at",
+          "in_scope",
           "details"
         ],
         "title": "FoundPersonCaseRead"
@@ -12476,6 +13379,61 @@
             ],
             "title": "Contact Details",
             "description": "Owner or family contact details. Write-only: encrypted at rest and never returned by case endpoints. Police and admins read it through POST /cases/{id}/contact/reveal, which is audited."
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id",
+            "description": "Optional app-instance id for offline sync"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id",
+            "description": "Required with client_record_id; identifies the device that created the record offline"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id",
+            "description": "Stable client-generated id; retries with the same id return the original case"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At",
+            "description": "When the record was created on the device (UTC)"
           }
         },
         "additionalProperties": false,
@@ -12947,6 +13905,19 @@
         ],
         "title": "Gender"
       },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
       "LegalHoldCreate": {
         "properties": {
           "reason": {
@@ -13115,7 +14086,7 @@
             ],
             "title": "Name Local",
             "examples": [
-              "\u0939\u0930 \u0915\u0940 \u092a\u094c\u0921\u093c\u0940"
+              "हर की पौड़ी"
             ]
           },
           "sector_id": {
@@ -13553,6 +14524,11 @@
             "title": "Anonymized At",
             "description": "Personal details were removed by an approved retention run"
           },
+          "in_scope": {
+            "type": "boolean",
+            "title": "In Scope",
+            "description": "Same meaning as on the case list: false marks a case the caller may see only as a read-only summary. A case outside the caller's scope is never returned by this endpoint (it is a 404), so a 200 always carries true; clients should still key read-only behaviour off this field."
+          },
           "details": {
             "$ref": "#/components/schemas/LostItemDetailsRead"
           }
@@ -13572,6 +14548,7 @@
           "created_at",
           "updated_at",
           "closed_at",
+          "in_scope",
           "details"
         ],
         "title": "LostItemCaseRead"
@@ -13756,6 +14733,61 @@
             ],
             "title": "Contact Details",
             "description": "Owner or family contact details. Write-only: encrypted at rest and never returned by case endpoints. Police and admins read it through POST /cases/{id}/contact/reveal, which is audited."
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id",
+            "description": "Optional app-instance id for offline sync"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id",
+            "description": "Required with client_record_id; identifies the device that created the record offline"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id",
+            "description": "Stable client-generated id; retries with the same id return the original case"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At",
+            "description": "When the record was created on the device (UTC)"
           }
         },
         "additionalProperties": false,
@@ -15556,6 +16588,11 @@
             "title": "Anonymized At",
             "description": "Personal details were removed by an approved retention run"
           },
+          "in_scope": {
+            "type": "boolean",
+            "title": "In Scope",
+            "description": "Same meaning as on the case list: false marks a case the caller may see only as a read-only summary. A case outside the caller's scope is never returned by this endpoint (it is a 404), so a 200 always carries true; clients should still key read-only behaviour off this field."
+          },
           "details": {
             "$ref": "#/components/schemas/MissingPersonDetailsRead"
           }
@@ -15575,6 +16612,7 @@
           "created_at",
           "updated_at",
           "closed_at",
+          "in_scope",
           "details"
         ],
         "title": "MissingPersonCaseRead"
@@ -15844,6 +16882,61 @@
             ],
             "title": "Contact Details",
             "description": "Owner or family contact details. Write-only: encrypted at rest and never returned by case endpoints. Police and admins read it through POST /cases/{id}/contact/reveal, which is audited."
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id",
+            "description": "Optional app-instance id for offline sync"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id",
+            "description": "Required with client_record_id; identifies the device that created the record offline"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id",
+            "description": "Stable client-generated id; retries with the same id return the original case"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At",
+            "description": "When the record was created on the device (UTC)"
           }
         },
         "additionalProperties": false,
@@ -16488,6 +17581,57 @@
             ],
             "title": "Corrects Note Id",
             "description": "Required when note_type is CORRECTION"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At"
           }
         },
         "additionalProperties": false,
@@ -17187,6 +18331,37 @@
         ],
         "title": "RefreshRequest"
       },
+      "ResetPasswordRequest": {
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Identifier",
+            "description": "The same username, email, or mobile number used to request the code"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6,12}$",
+            "title": "Code",
+            "description": "The one-time code from the email or SMS"
+          },
+          "new_password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "New Password"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "identifier",
+          "code",
+          "new_password"
+        ],
+        "title": "ResetPasswordRequest"
+      },
       "RetentionPlanReport": {
         "properties": {
           "cutoff": {
@@ -17855,6 +19030,491 @@
         ],
         "title": "StatusHistoryRead"
       },
+      "SyncOperation": {
+        "type": "string",
+        "enum": [
+          "CREATE_CASE",
+          "UPDATE_CASE",
+          "ADD_NOTE"
+        ],
+        "title": "SyncOperation"
+      },
+      "SyncPullItem": {
+        "properties": {
+          "case": {
+            "type": "object",
+            "title": "Case"
+          },
+          "server_updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Server Updated At"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case",
+          "server_updated_at",
+          "version"
+        ],
+        "title": "SyncPullItem"
+      },
+      "SyncPullResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SyncPullItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Server Time"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more",
+          "server_time"
+        ],
+        "title": "SyncPullResponse"
+      },
+      "SyncPushRecord": {
+        "properties": {
+          "client_record_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Record Id"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/SyncOperation"
+          },
+          "client_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Client Created At"
+          },
+          "data": {
+            "type": "object",
+            "title": "Data"
+          },
+          "case_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaseType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Required for CREATE_CASE"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id",
+            "description": "Server case id for UPDATE_CASE and ADD_NOTE"
+          },
+          "case_client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Client Record Id",
+            "description": "Offline case id when the server case id is not yet known"
+          },
+          "base_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Version",
+            "description": "Required for UPDATE_CASE; mismatch returns CONFLICT"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "client_record_id",
+          "operation",
+          "client_created_at"
+        ],
+        "title": "SyncPushRecord"
+      },
+      "SyncPushRequest": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Device Id"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "pending_count": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Count",
+            "description": "Client-reported backlog; stored as reported"
+          },
+          "failed_count": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Count",
+            "description": "Client-reported failures; stored as reported"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/SyncPushRecord"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Records"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device_id"
+        ],
+        "title": "SyncPushRequest"
+      },
+      "SyncPushResponse": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SyncRecordResult"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "synced": {
+            "type": "integer",
+            "title": "Synced"
+          },
+          "duplicates": {
+            "type": "integer",
+            "title": "Duplicates"
+          },
+          "conflicts": {
+            "type": "integer",
+            "title": "Conflicts"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Server Time"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device_id",
+          "results",
+          "synced",
+          "duplicates",
+          "conflicts",
+          "failed",
+          "server_time"
+        ],
+        "title": "SyncPushResponse"
+      },
+      "SyncRecordOutcome": {
+        "type": "string",
+        "enum": [
+          "SYNCED",
+          "DUPLICATE",
+          "CONFLICT",
+          "FAILED"
+        ],
+        "title": "SyncRecordOutcome"
+      },
+      "SyncRecordResult": {
+        "properties": {
+          "client_record_id": {
+            "type": "string",
+            "title": "Client Record Id"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/SyncOperation"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/SyncRecordOutcome"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          },
+          "case_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Number"
+          },
+          "note_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note Id"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "server_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Updated At"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "error_details": {
+            "title": "Error Details"
+          },
+          "case": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case",
+            "description": "Current server case on CONFLICT so the client can resolve without a separate fetch"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "client_record_id",
+          "operation",
+          "outcome"
+        ],
+        "title": "SyncRecordResult"
+      },
+      "SyncStatusResponse": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "last_successful_sync_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Successful Sync At",
+            "description": "Latest of last successful push and pull for this device"
+          },
+          "last_successful_push_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Successful Push At"
+          },
+          "last_successful_pull_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Successful Pull At"
+          },
+          "pending_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Count",
+            "description": "Last value reported by the client; null if never reported"
+          },
+          "failed_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Count",
+            "description": "Last value reported by the client; null if never reported"
+          },
+          "server_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Cursor",
+            "description": "Current sync cursor for the caller's permitted cases"
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Server Time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "server_time"
+        ],
+        "title": "SyncStatusResponse"
+      },
       "TokenResponse": {
         "properties": {
           "access_token": {
@@ -18217,6 +19877,39 @@
         "additionalProperties": false,
         "type": "object",
         "title": "UserUpdate"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
       }
     },
     "securitySchemes": {

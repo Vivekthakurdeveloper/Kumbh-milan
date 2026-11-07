@@ -8,6 +8,7 @@ from app.api.v1 import (
     dashboard,
     locations,
     matches,
+    media,
     reports,
     retention,
     staff_notifications,
@@ -24,6 +25,7 @@ for router in cases.type_routers:
     api_router.include_router(router)
 api_router.include_router(cases.shared)
 api_router.include_router(matches.router)
+api_router.include_router(media.router)
 api_router.include_router(staff_notifications.router)
 api_router.include_router(sync.router)
 api_router.include_router(audit.router)

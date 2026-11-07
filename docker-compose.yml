@@ -81,7 +81,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${KUMBH_APP_DB_USER:-kumbh_app}:${KUMBH_APP_DB_PASSWORD}@postgres:5432/kumbh_setu
       S3_ENDPOINT_URL: http://objectstore:8333
-      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:8333}
+      # Empty by default: the API then serves media links itself, on the host the browser already uses for the API.
+      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     ports:
       - "127.0.0.1:8000:8000"

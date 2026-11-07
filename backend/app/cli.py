@@ -14,7 +14,7 @@ from app.auth.passwords import hash_password, validate_new_password
 from app.common.errors import AppError
 from app.common.time import utcnow
 from app.database import SessionLocal
-from app.models import IdempotencyKey, LoginAttempt, RefreshToken, User
+from app.models import IdempotencyKey, LoginAttempt, PasswordResetToken, RefreshToken, User
 from app.models.enums import Role
 from app.storage import get_storage
 
@@ -62,8 +62,14 @@ def purge_expired(args: argparse.Namespace) -> int:
         sessions = db.execute(
             delete(RefreshToken).where(RefreshToken.expires_at < now - timedelta(days=args.session_days))
         ).rowcount
+        resets = db.execute(
+            delete(PasswordResetToken).where(PasswordResetToken.expires_at < now - timedelta(days=1))
+        ).rowcount
         db.commit()
-    print(f"Purged {keys} idempotency keys, {attempts} login attempts, {sessions} expired sessions")
+    print(
+        f"Purged {keys} idempotency keys, {attempts} login attempts, {sessions} expired sessions, "
+        f"{resets} password reset codes"
+    )
     return 0
 
 

@@ -17,8 +17,13 @@ def test_openapi_documents_every_operation(client):
         assert {"get", "patch"} <= set(paths[f"{API}/cases/{kind}/{{case_id}}"])
         assert "post" in paths[f"{API}/cases/{kind}/{{case_id}}/assign"]
         assert "post" in paths[f"{API}/cases/{kind}/{{case_id}}/status"]
+    # Credentials-by-body or credentials-in-path endpoints: the token or code is the credential.
+    public = {
+        f"{API}/auth/login", f"{API}/auth/refresh", f"{API}/auth/forgot-password", f"{API}/auth/reset-password",
+        f"{API}/media/{{token}}",
+    }
     for path, ops in paths.items():
-        if not path.startswith(API) or path in (f"{API}/auth/login", f"{API}/auth/refresh"):
+        if not path.startswith(API) or path in public:
             continue
         for method, op in ops.items():
             assert op.get("security"), f"{method.upper()} {path} is missing a security requirement"

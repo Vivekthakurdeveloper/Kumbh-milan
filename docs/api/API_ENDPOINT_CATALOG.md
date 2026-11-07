@@ -44,6 +44,8 @@ Not for frontend use except an optional "service status" indicator using `/healt
 | POST | `/api/v1/auth/logout` | Logout | Bearer | All roles | 204 | 401 | Implemented — tested | `v1/auth.py:logout` |
 | GET | `/api/v1/auth/me` | Current user, role, permissions (app shell) | Bearer | All roles | 200 `MeResponse` | 401 | Implemented — tested | `v1/auth.py:me` |
 | POST | `/api/v1/auth/change-password` | Change own password | Bearer | All roles | 204 (all sessions revoked) | 422 `invalid_current_password`, `weak_password`; 429 | Implemented — tested | `v1/auth.py:change_password` |
+| POST | `/api/v1/auth/forgot-password` | Forgot password: email or SMS a one-time code | None | — | 202 `ForgotPasswordResponse` (identical for known and unknown accounts) | 422; 429; 503 `password_reset_unavailable` | Implemented — tested (email via SMTP; SMS needs a provider) | `v1/auth.py:forgot_password` |
+| POST | `/api/v1/auth/reset-password` | Forgot password: set a new password with the code | None | — | 204 (all sessions revoked) | 422 `invalid_reset_code`, `weak_password`; 429 | Implemented — tested | `v1/auth.py:reset_password` |
 | POST | `/api/v1/auth/mfa/enroll` | Start TOTP enrollment | Bearer | All roles | 200 `MfaEnrollResponse` | 409 `mfa_disabled`, `mfa_already_enabled` | Implemented — tested (disabled by default) | `v1/auth.py:enroll_mfa` |
 | POST | `/api/v1/auth/mfa/confirm` | Confirm TOTP enrollment | Bearer | All roles | 204 | 409 `mfa_disabled`, `mfa_already_enabled`, `mfa_enrollment_missing`; 422 `mfa_code_invalid` | Implemented — tested (disabled by default) | `v1/auth.py:confirm_mfa` |
 
@@ -139,7 +141,7 @@ That is **19 operations**.
 |---|---|---|---|---|---|---|---|
 | GET | `/api/v1/matches` | Cross-case match review queue | All roles | 200 `Page[MatchQueueItem]` | 401 | Implemented — tested | `v1/matches.py:list_match_queue` |
 | GET | `/api/v1/matches/{match_id}` | Side-by-side match review detail | All roles with a case in scope | 200 `MatchDetail` | 404 `match_not_found` | Implemented — tested | `get_match` |
-| GET | `/api/v1/matches/{match_id}/photos/{side}` | Presigned URL for candidate photo (`left`/`right`) | Police, Admin (`match:review`) | 200 `MatchPhotoUrl` | 403; 404 | Implemented — tested | `get_match_photo` |
+| GET | `/api/v1/matches/{match_id}/photos/{side}` | Browser-reachable short-lived URL for candidate photo (`left`/`right`); no similarity score | Police, Admin (`match:review`) | 200 `MatchPhotoUrl` | 403; 404 | Implemented — tested | `get_match_photo` |
 | GET | `/api/v1/matches/{match_id}/history` | Match audit history | Police, Admin (`match:review`) | 200 `MatchHistoryEvent[]` | 404 | Implemented — tested | `get_match_history` |
 
 Query on list: `status` (default `PROPOSED`), `confidence_band`, `match_domain`, `source` (`MANUAL`/`AUTOMATIC`/`FACE`), `limit`, `offset`. Scoped like dashboard `pending_match_reviews`. Confirm/reject still uses `POST /cases/{id}/matches/{mid}/review`. FACE candidates require two different officers before confirmation. Embeddings are never returned.
@@ -152,6 +154,12 @@ Query on list: `status` (default `PROPOSED`), `confidence_band`, `match_domain`,
 | POST | `/api/v1/staff-notifications/{id}/read` | Mark notification read | Recipient only | 200 `StaffNotificationRead` | 404 | Implemented — tested | `mark_read` |
 
 Query: `status` (`UNREAD`/`READ`), `limit`, `offset`. Each item includes `match_id` and `link` (`/matches/{id}`). No SMS/WhatsApp/email in this phase.
+
+## 8c. Media (`/api/v1/media`)
+
+| Method | Path | Purpose / screen | Auth | Success | Errors | Status | Handler |
+|---|---|---|---|---|---|---|---|
+| GET | `/api/v1/media/{token}` | Stream a private photo or recording through a short-lived signed link (the `url` from the attachment and match-photo endpoints) | Signed token in the path | 200 / 206 file | 404 `media_link_invalid`; 410 `media_link_expired`; 416; 503 | Implemented — tested | `v1/media.py:get_media` |
 
 ## 9. Audit (`/api/v1/audit-events`)
 
@@ -180,7 +188,7 @@ The whole router depends on `retention:manage`, so non-admins get `403` before v
 
 | Method | Path | Purpose / screen | Roles | Success | Errors | Status | Handler |
 |---|---|---|---|---|---|---|---|
-| GET | `/api/v1/dashboard/summary` | Home dashboard counts (scoped) | All roles | 200 `DashboardSummary` | 401 | **Partial** (counts only; no breakdowns by location/date, no activity feed) | `v1/dashboard.py:summary` |
+| GET | `/api/v1/dashboard/summary` | Home dashboard counts (scoped); optional `from`/`to` window for Today / 7 days / 30 days | All roles | 200 `DashboardSummary` | 401; 422 `invalid_period` | **Partial** (counts only; no breakdowns by location, no activity feed) | `v1/dashboard.py:summary` |
 | GET | `/api/v1/reports/cases.csv` | CSV export | All roles (scoped) | 200 `text/csv`, headers `X-Export-Rows`, `X-Export-Truncated` | 422 `invalid_range`, `range_too_large` | **Partial** (one report, ≤31 days, ≤1000 rows, 6 columns) | `v1/reports.py:export_cases` |
 
 ## 12. Totals
@@ -188,7 +196,7 @@ The whole router depends on `retention:manage`, so non-admins get `403` before v
 | Module | Operations |
 |---|---|
 | Operations (`/health`, `/ready`) | 2 |
-| Authentication | 7 |
+| Authentication | 9 |
 | Stations | 3 |
 | Users | 7 |
 | Locations | 6 |
@@ -196,14 +204,15 @@ The whole router depends on `retention:manage`, so non-admins get `403` before v
 | Shared case operations | 19 |
 | Match review queue | 4 |
 | Staff notifications | 2 |
+| Media | 1 |
 | Audit | 1 |
 | Retention and legal holds | 10 |
 | Dashboard | 1 |
 | Reports | 1 |
-| **Total in OpenAPI** | **88** |
+| **Total in OpenAPI** | **91** |
 | `/metrics` (outside OpenAPI) | 1 |
 
-Status counts for the 88 OpenAPI operations: Phase 2 adds face-candidate detail, photo URLs, match history, and in-app staff notifications. `POST /cases/{id}/notifications` remains **blocked** for real SMS/WhatsApp delivery (no provider). Missing endpoints are listed in [API_GAP_ANALYSIS.md](./API_GAP_ANALYSIS.md).
+Status counts for the 91 OpenAPI operations: Phase 2 adds face-candidate detail, photo URLs, match history, and in-app staff notifications. `POST /cases/{id}/notifications` remains **blocked** for real SMS/WhatsApp delivery (no provider). Missing endpoints are listed in [API_GAP_ANALYSIS.md](./API_GAP_ANALYSIS.md).
 
 ## 13. Role → permission matrix (from `backend/app/auth/permissions.py`)
 

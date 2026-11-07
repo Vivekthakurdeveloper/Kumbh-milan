@@ -1,4 +1,6 @@
 import logging
+from collections.abc import Iterator
+from dataclasses import dataclass
 from functools import lru_cache
 from urllib.parse import quote
 
@@ -6,10 +8,26 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-from app.common.errors import ServiceUnavailable
+from app.common.errors import RangeNotSatisfiable, ServiceUnavailable
 from app.config import Settings, get_settings
 
 logger = logging.getLogger("kumbh_setu.storage")
+
+
+@dataclass
+class ObjectStream:
+    """An open object download. Iterate to read; always close()."""
+
+    body: object
+    content_length: int
+    content_range: str | None
+    partial: bool
+
+    def chunks(self, size: int = 64 * 1024) -> Iterator[bytes]:
+        try:
+            yield from self.body.iter_chunks(chunk_size=size)
+        finally:
+            self.body.close()
 
 
 class ObjectStorage:
@@ -44,6 +62,26 @@ class ObjectStorage:
         except (BotoCoreError, ClientError) as exc:
             logger.error("Object read failed", extra={"error": type(exc).__name__})
             raise ServiceUnavailable("Media storage is unavailable; try again", code="storage_unavailable") from exc
+
+    def open(self, key: str, *, byte_range: str | None = None) -> ObjectStream:
+        """Streams an object without buffering it. `byte_range` is a single validated HTTP range (bytes=0-99)."""
+        extra = {"Range": byte_range} if byte_range else {}
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=key, **extra)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "InvalidRange":
+                raise RangeNotSatisfiable("Requested range is not satisfiable") from exc
+            logger.error("Object read failed", extra={"error": type(exc).__name__})
+            raise ServiceUnavailable("Media storage is unavailable; try again", code="storage_unavailable") from exc
+        except BotoCoreError as exc:
+            logger.error("Object read failed", extra={"error": type(exc).__name__})
+            raise ServiceUnavailable("Media storage is unavailable; try again", code="storage_unavailable") from exc
+        return ObjectStream(
+            body=response["Body"],
+            content_length=int(response["ContentLength"]),
+            content_range=response.get("ContentRange"),
+            partial=bool(byte_range),
+        )
 
     def copy(self, source_key: str, dest_key: str) -> None:
         extra = {"MetadataDirective": "COPY"}

@@ -216,6 +216,48 @@ A case id outside the caller's scope, or of a different type than the URL's `{ty
 
 **Success:** `204`. **Every session of the user, including the current one, is revoked**: discard tokens and send the user to login. **Errors:** `422 invalid_current_password`, `422 weak_password` (message explains the rule), `429`. **Status:** Implemented — tested.
 
+### Endpoints: Forgot password — `POST /api/v1/auth/forgot-password`, `POST /api/v1/auth/reset-password`
+
+Self-service reset for a user who cannot sign in. **Auth:** none. Separate from the admin route `POST /api/v1/users/{user_id}/reset-password`, which is unchanged.
+
+**Step 1: request a code.** `POST /api/v1/auth/forgot-password`
+
+<!-- validate: app.schemas.auth:ForgotPasswordRequest -->
+```json
+{"identifier": "officer.sharma", "channel": null}
+```
+
+`identifier` is a username, an email address, or a mobile number (`+91…` or a 10-digit number). `channel` is optional (`EMAIL` or `SMS`). When omitted: an email address gets email, a mobile number gets SMS, and a username gets email, or SMS when the account has no email. The account must have that contact detail on file (admins set `email` and `phone_number` in user management).
+
+**Success `202`**, always the same body, whether or not an account matched, an address exists, or a message was sent:
+
+<!-- validate: app.schemas.auth:ForgotPasswordResponse -->
+```json
+{"message": "If an account matches, a reset code has been sent.", "code_length": 8, "expires_in_minutes": 15}
+```
+
+The message is sent after the response, so neither the body nor the timing reveals whether the account exists. Show the user the same "check your email or phone" screen every time. `code_length` and `expires_in_minutes` are deployment settings (`PASSWORD_RESET_CODE_LENGTH`, `PASSWORD_RESET_TTL_MINUTES`), safe to use for the input and the hint text. A new request replaces the previous code. An account gets at most 3 codes per hour (`PASSWORD_RESET_MAX_REQUESTS_PER_HOUR`); further requests still return `202` but send nothing. The message holds the code only: no link, no case data.
+
+**Errors:** `422` (empty or malformed body, `channel` not `EMAIL`/`SMS`), `429` (10 per hour per IP, `Retry-After`), `503 password_reset_unavailable` when the deployment has neither email nor SMS delivery configured (the only case that reveals anything, and it is about the server, not the account; show "Ask an administrator to reset your password").
+
+**Step 2: set the new password.** `POST /api/v1/auth/reset-password`
+
+<!-- validate: app.schemas.auth:ResetPasswordRequest -->
+```json
+{"identifier": "officer.sharma", "code": "48201937", "new_password": "Ganga#River2027!"}
+```
+
+`identifier` is the same value used in step 1. **Success `204`.** Every session of the user is revoked, any login lockout is cleared, and the user is emailed that the password changed (when an email is on file); send them to the login page. **Errors:**
+
+| Status / code | Meaning | UI |
+|---|---|---|
+| `422 invalid_reset_code` | Wrong, expired, already used, replaced by a newer code, or burned after 5 wrong guesses (`PASSWORD_RESET_MAX_ATTEMPTS`). One message for all of these | "That code is not valid. Request a new one." with a link back to step 1 |
+| `422 weak_password` | The code was right but the password breaks the policy (same rules as change-password). **The code is not used up**, so let the user retry the password | Show the message under the password field |
+| `422 validation_failed` | `code` is not 6–12 digits, or a field is missing | Field errors |
+| `429` | 20 per hour per IP | Show retry time |
+
+Codes expire after `PASSWORD_RESET_TTL_MINUTES` (15). Codes are stored hashed and never logged or audited. Audit actions: `PASSWORD_RESET_REQUESTED`, `PASSWORD_RESET_COMPLETED`, `PASSWORD_RESET_CODE_BURNED`. **Delivery:** email goes out over SMTP when `EMAIL_PROVIDER=smtp`. SMS needs a real SMS provider behind `NOTIFICATION_PROVIDER`; none is integrated yet (the `console` and `mock` providers are local only), so today only email is deliverable outside local development. **Status:** Implemented — tested.
+
 ### Endpoints: MFA — `POST /api/v1/auth/mfa/enroll`, `POST /api/v1/auth/mfa/confirm`
 
 Optional TOTP step-up. **Disabled by default:** both return `409 mfa_disabled` unless `MFA_MODE=totp`. Enroll returns `{"secret": "<base32>", "digits": 6, "period_seconds": 30}` once; confirm takes `{"code": "123456"}` (exactly 6 digits) and returns `204`. Errors: `409 mfa_already_enabled`, `409 mfa_enrollment_missing`, `422 mfa_code_invalid`. **Frontend:** hide MFA UI unless the product enables it (no API reports the mode; see gap G-18). **Status:** Implemented — tested.
@@ -569,6 +611,7 @@ Found item request:
   "closed_at": null,
   "archived_at": null,
   "anonymized_at": null,
+  "in_scope": true,
   "details": {
     "person_name": "Sample Child Name",
     "approximate_age": 7,
@@ -673,7 +716,7 @@ URL-encode `+` in offsets as `%2B`.
 
 ### 6.5 Endpoint: Case details — `GET /api/v1/cases/{type}/{case_id}`
 
-**Success 200:** `{Type}CaseRead` (as in §6.3). **Errors:** `404 case_not_found` (out of scope, wrong type, or unknown), `422` (malformed uuid). **Status:** Implemented — tested.
+**Success 200:** `{Type}CaseRead` (as in §6.3). `GET /api/v1/cases/{case_id}` returns the same body whatever the type. Every case read (create, get, list, edit, status, custody) carries `in_scope: boolean` with the same meaning as on the case list: `false` marks a read-only, summary-only case. **Out-of-scope cases are not disclosed by this endpoint**: a case the caller cannot open is `404 case_not_found`, so a `200` always has `in_scope: true`. Drive read-only UI from the field anyway, and treat a `404` on a direct link as "not available to you". **Errors:** `404 case_not_found` (out of scope, wrong type, or unknown), `422` (malformed uuid). **Status:** Implemented — tested.
 
 ### 6.6 Endpoint: Edit case — `PATCH /api/v1/cases/{type}/{case_id}`
 
@@ -878,7 +921,7 @@ Release (handover):
 | `age_group` | From person details; `null` for item cases. |
 | `gender` | Missing person: `gender`; found person: `estimated_gender`; item cases: `null`. Redacted on out-of-scope counterparts. |
 | `event_at` | `last_seen_at` / `found_at`. |
-| `in_scope` | `false` only with `all_stations=true` for cases the caller cannot open. Show as read-only; `GET /cases/{id}` will 404. |
+| `in_scope` | `false` only with `all_stations=true` for cases the caller cannot open. Show as read-only; `GET /cases/{id}` will 404. The single-case response carries the same field (always `true`, because out-of-scope ids are 404). |
 
 Example: `GET /api/v1/cases?q=%22red%20frock%22&case_type=FOUND_PERSON&all_stations=true&status=OPEN`
 
@@ -1017,7 +1060,7 @@ curl -X POST "$BASE/cases/7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11/attachments" \
 
 #### Endpoint: Get download URL — `GET /api/v1/cases/{case_id}/attachments/{attachment_id}`
 
-Returns a short-lived presigned URL to the private bucket. Every call is audited (`ATTACHMENT_ACCESSED`).
+Returns a short-lived URL **on a host the browser can reach** (see [Media links](#media-links-get-apiv1mediatoken)). Every call is audited (`ATTACHMENT_ACCESSED`).
 
 <!-- validate: app.schemas.workflow:AttachmentDownload -->
 ```json
@@ -1348,7 +1391,9 @@ Returns only matches that touch at least one case visible to the caller — the 
 
 ### Endpoint: Candidate photograph URL — `GET /api/v1/matches/{match_id}/photos/{side}`
 
-**Purpose:** short-lived presigned URL for the left or right candidate photograph. **Roles:** `match:review` with a case in scope. **Path:** `side` is `left` or `right`. Audited as `ATTACHMENT_ACCESSED` with `purpose: match_review`.
+**Purpose:** short-lived, browser-reachable URL for the left or right candidate photograph. **Roles:** `match:review` with a case in scope. **Path:** `side` is `left` or `right`. Audited as `ATTACHMENT_ACCESSED` with `purpose: match_review`.
+
+**Host.** `url` is never an internal hostname (no `localhost:8333`, no `objectstore`). It is either a direct signed link on the object store's public host (`S3_PUBLIC_ENDPOINT_URL`, or AWS S3), or `<api origin>/api/v1/media/<token>` served by this API; see [Media links](#media-links-get-apiv1mediatoken). Use it as `<img src>`; it needs no `Authorization` header and expires after `expires_in` seconds, so request a new one instead of caching it. **No `similarity_score`**: the response has exactly the five fields below and never a face-match percentage.
 
 <!-- validate: app.schemas.faces:MatchPhotoUrl -->
 ```json
@@ -1498,10 +1543,31 @@ Plain array of `NotificationRead`, oldest first. **Status:** Implemented — tes
 
 **Roles:** all. Counts only cases visible to the caller and **excludes archived** cases. "Active" = `OPEN`, `UNDER_REVIEW`, `ASSIGNED`, `MATCH_FOUND`, `REOPENED`.
 
+**Query (optional):** `from` and `to` drive the Today / 7 days / 30 days selector. Each is an ISO 8601 **date** (`2026-11-06`, the whole Asia/Kolkata day) or **datetime** (`2026-11-06T09:30:00+05:30`; no offset means Asia/Kolkata). Both bounds are inclusive and either may be omitted. `to` before `from`, an unparseable value, or a span over 366 days is `422 invalid_period`.
+
+| Selector | Request (today = 2026-11-06) |
+|---|---|
+| Today | `?from=2026-11-06&to=2026-11-06` |
+| 7 days | `?from=2026-10-31&to=2026-11-06` |
+| 30 days | `?from=2026-10-08&to=2026-11-06` |
+
+With a window, exactly four counters change meaning, and the rest keep describing the current state:
+
+| Field | No window | With `from`/`to` |
+|---|---|---|
+| `urgent_active` | all active CRITICAL/HIGH cases | active CRITICAL/HIGH cases **registered in the window** |
+| `unassigned_active` | all active unassigned cases | active unassigned cases registered in the window |
+| `registered_today` | cases registered since midnight Asia/Kolkata | cases registered in the window (the name is kept for compatibility) |
+| `pending_match_reviews` | all `PROPOSED` matches touching a visible case | `PROPOSED` matches **created in the window** |
+
+`period_from` / `period_to` echo the applied window (`null` when no window was sent, or for an open side). `active_by_type`, `by_status`, `active_total`, `attachments_awaiting_scan` and `notifications_failed` are always current and ignore the window. Without `from` and `to` the response is exactly as before.
+
 <!-- validate: app.schemas.dashboard:DashboardSummary -->
 ```json
 {
   "generated_at": "2026-10-29T09:00:00Z",
+  "period_from": null,
+  "period_to": null,
   "active_by_type": {"MISSING_PERSON": 14, "FOUND_PERSON": 9, "LOST_ITEM": 31, "FOUND_ITEM": 22},
   "by_status": {"OPEN": 40, "UNDER_REVIEW": 6, "ASSIGNED": 25, "MATCH_FOUND": 5, "RESOLVED": 61, "CLOSED": 12},
   "active_total": 76,
@@ -1515,6 +1581,21 @@ Plain array of `NotificationRead`, oldest first. **Status:** Implemented — tes
 ```
 
 **Important:** keys with a zero count are **omitted** from `active_by_type` and `by_status` (e.g. no `REOPENED` key above). Default missing keys to 0. `active_by_type` only counts active statuses, so it gives open missing persons etc., not totals. `pending_match_reviews` counts `PROPOSED` matches touching any visible case. **Not available:** totals per type across all statuses, counts by location/sector/station/date, recent activity, per-officer workload (gap G-8). **Status:** Partial — implemented and tested for what it returns.
+
+---
+
+### Media links — `GET /api/v1/media/{token}`
+
+**Auth:** none; the signed token in the path is the credential, so the URL works as an `<img src>` or `<audio src>`. You never build this URL yourself: it is the `url` returned by `GET /cases/{id}/attachments/{aid}` and `GET /matches/{id}/photos/{side}`.
+
+The `url` host is always one the browser can reach. Deployments use one of two modes (`MEDIA_DELIVERY`, default `auto`):
+
+| Mode | `url` looks like | When |
+|---|---|---|
+| presigned | `https://media.example.org/bucket/key?X-Amz-…` | `S3_PUBLIC_ENDPOINT_URL` is set, or storage is AWS S3 |
+| proxy | `https://api.example.org/api/v1/media/<token>` | otherwise (for example local docker, where storage is on an internal host); the API streams the file |
+
+Treat `url` as opaque and short-lived: it expires after `expires_in` seconds (`S3_PRESIGN_TTL_SECONDS`, default 300), so request a fresh one when a screen opens rather than caching it. In proxy mode the response is `200` with the file (or `206` for a `Range` request; images are `Content-Disposition: inline`), `Cache-Control: no-store`, and **the link stops working if the file is withdrawn or the user's sessions are revoked** (logout-everywhere, password change or reset). **Errors:** `404 media_link_invalid` (tampered, unknown, withdrawn, or user revoked), `410 media_link_expired` (fetch a new URL), `416 range_not_satisfiable`, `503 storage_unavailable`. For a Content-Security-Policy, allow the API origin (proxy) or the store host (presigned) in `img-src` and `media-src`. **Status:** Implemented — tested.
 
 ---
 
@@ -1668,7 +1749,9 @@ Every `code` the backend can return, by HTTP status. Codes are stable identifier
 |---|---|---|---|
 | `login` | `POST /auth/login` | 30 | client IP |
 | `refresh` | `POST /auth/refresh` | 60 | client IP |
-| `password_change` | change-password, reset-password | 10 per hour | user |
+| `password_change` | change-password, admin `POST /users/{id}/reset-password` | 10 per hour | user |
+| `forgot_password` | `POST /auth/forgot-password` | 10 per hour | client IP, fail-closed |
+| `reset_password` | `POST /auth/reset-password` | 20 per hour | client IP, fail-closed |
 | `upload` | `POST /cases/{id}/attachments` | 30 | user |
 | `case_create` | `POST /cases/{type}` | 60 | user |
 | `search` | `GET /cases`, `/cases/{type}`, `/cases/nearby`, `/cases/map` | 180 | user |

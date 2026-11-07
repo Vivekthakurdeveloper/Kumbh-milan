@@ -45,9 +45,11 @@ from app.services import notifications as notification_service
 from app.services import workflow as workflow_service
 from app.services.case_types import CASE_TYPE_SPECS, CaseTypeSpec
 from app.storage import ObjectStorage, get_storage
+from app.storage.media import MediaLinks, get_media_links
 from app.storage.scanner import MalwareScanner, get_scanner
 
 StorageDep = Annotated[ObjectStorage, Depends(get_storage)]
+MediaDep = Annotated[MediaLinks, Depends(get_media_links)]
 ScannerDep = Annotated[MalwareScanner, Depends(get_scanner)]
 PageDep = Annotated[PageParams, Depends()]
 IdempotencyKey = Annotated[
@@ -359,9 +361,9 @@ def upload_attachment(
     summary="Get a short-lived download URL (access is audited)",
 )
 def download_attachment(
-    case_id: uuid.UUID, attachment_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession, storage: StorageDep
+    case_id: uuid.UUID, attachment_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession, media: MediaDep
 ):
-    url, ttl, content_type = attachment_service.download_url(db, storage, principal.user, case_id, attachment_id)
+    url, ttl, content_type = attachment_service.download_url(db, media, principal.user, case_id, attachment_id)
     return AttachmentDownload(url=url, expires_in=ttl, content_type=content_type)
 
 

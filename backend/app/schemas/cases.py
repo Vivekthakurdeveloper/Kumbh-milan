@@ -120,6 +120,13 @@ class CaseRead(ReadModel):
     closed_at: datetime | None
     archived_at: datetime | None = Field(None, description="Set by retention; archived cases are read-only and hidden by default")
     anonymized_at: datetime | None = Field(None, description="Personal details were removed by an approved retention run")
+    in_scope: bool = Field(
+        description=(
+            "Same meaning as on the case list: false marks a case the caller may see only as a read-only summary. "
+            "A case outside the caller's scope is never returned by this endpoint (it is a 404), so a 200 always "
+            "carries true; clients should still key read-only behaviour off this field."
+        )
+    )
 
 
 class CaseSummary(ReadModel):

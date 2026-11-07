@@ -405,7 +405,7 @@ def _get_attachment(db: Session, case_id: uuid.UUID, attachment_id: uuid.UUID, *
 
 
 def download_url(
-    db: Session, storage: ObjectStorage, actor: User, case_id: uuid.UUID, attachment_id: uuid.UUID
+    db: Session, media, actor: User, case_id: uuid.UUID, attachment_id: uuid.UUID
 ) -> tuple[str, int, str]:
     require_permission(actor, Permission.ATTACHMENT_DOWNLOAD)
     case = load_case(db, actor, case_id)
@@ -415,13 +415,8 @@ def download_url(
             "This file is not available: it has not passed malware scanning",
             code="attachment_not_available", details={"scan_status": attachment.scan_status},
         )
-    ttl = get_settings().s3_presign_ttl_seconds
-    url = storage.presign_get(
-        attachment.storage_key,
-        content_type=attachment.content_type,
-        filename=attachment.original_filename or f"attachment-{attachment.id.hex}",
-        ttl_seconds=ttl,
-    )
+    ttl = media.ttl_seconds
+    url = media.url_for(attachment, actor)
     record_audit(
         db, action=AuditAction.ATTACHMENT_ACCESSED, entity_type="case_attachment", entity_id=attachment.id,
         actor_user_id=actor.id, case=case,

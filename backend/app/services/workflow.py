@@ -936,8 +936,7 @@ def get_match_detail(db: Session, actor: User, match_id: uuid.UUID):
     )
 
 
-def match_photo_url(db: Session, storage, actor: User, match_id: uuid.UUID, side: str):
-    from app.config import get_settings
+def match_photo_url(db: Session, media, actor: User, match_id: uuid.UUID, side: str):
     from app.models import CaseAttachment
     from app.schemas.faces import MatchPhotoUrl
     from app.services.attachments import is_downloadable
@@ -956,13 +955,8 @@ def match_photo_url(db: Session, storage, actor: User, match_id: uuid.UUID, side
     if attachment is None or attachment.deleted_at is not None or not is_downloadable(attachment):
         raise NotFound("Candidate photograph is not available", code="attachment_not_available")
     case = db.get(Case, case_id)
-    ttl = get_settings().s3_presign_ttl_seconds
-    url = storage.presign_get(
-        attachment.storage_key,
-        content_type=attachment.content_type,
-        filename=attachment.original_filename or f"attachment-{attachment.id.hex}",
-        ttl_seconds=ttl,
-    )
+    ttl = media.ttl_seconds
+    url = media.url_for(attachment, actor)
     record_audit(
         db,
         action=AuditAction.ATTACHMENT_ACCESSED,

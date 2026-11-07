@@ -331,13 +331,17 @@ def update_case(
     return load_case(db, user, case_id, spec=spec), replayed
 
 
-def to_read(db: Session, case: Case, spec: CaseTypeSpec | None = None, contact_ids: set | None = None):
+def to_read(
+    db: Session, case: Case, spec: CaseTypeSpec | None = None, contact_ids: set | None = None, *, in_scope: bool = True
+):
+    """Callers load cases through case_visibility_clause, so every case reaching here is in scope."""
     spec = spec or spec_for(case.case_type)
     if contact_ids is None:
         contact_ids = case_repo.has_contact(db, [case.id])
     return spec.read_schema(
         **{field: getattr(case, field) for field in spec.read_schema.model_fields if hasattr(case, field) and field != "details"},
         has_contact_details=case.id in contact_ids,
+        in_scope=in_scope,
         details=spec.details_read_schema.model_validate(_detail(case, spec)),
     )
 
