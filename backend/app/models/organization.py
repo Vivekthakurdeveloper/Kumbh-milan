@@ -27,7 +27,8 @@ class User(TimestampMixin, Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(
-            "role = 'ADMIN' OR station_id IS NOT NULL", name="station_required_for_non_admin"
+            "role IN ('ADMIN', 'PUBLIC') OR station_id IS NOT NULL",
+            name="station_required_for_non_admin",
         ),
         CheckConstraint("username = lower(username)", name="username_lowercase"),
         Index("ix_users_station_role_active", "station_id", "role", "is_active"),

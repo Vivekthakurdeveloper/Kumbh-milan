@@ -23,6 +23,8 @@ from app.models.enums import (
     MatchSource,
     MatchStatus,
     NoteType,
+    NotificationChannel,
+    NotificationTemplate,
     Role,
 )
 from app.repositories import cases as case_repo
@@ -86,6 +88,33 @@ MATCH_CONFIRMATION_SOURCES = frozenset({S.OPEN, S.UNDER_REVIEW, S.ASSIGNED, S.RE
 AUTO_ASSIGN_SOURCES = frozenset({S.OPEN, S.UNDER_REVIEW, S.REOPENED})
 
 
+def _queue_lifecycle_notification(
+    db: Session, case: Case, *, previous: CaseStatus, target: CaseStatus, actor_id: uuid.UUID
+) -> None:
+    from app.services import notifications as notification_service
+
+    template = None
+    if target is S.RESOLVED:
+        template = NotificationTemplate.CASE_REUNITED
+    elif target is S.CLOSED:
+        template = NotificationTemplate.CASE_CLOSED
+    elif target is S.MATCH_FOUND:
+        template = NotificationTemplate.POTENTIAL_MATCH_VERIFIED
+    elif target not in (previous,):
+        template = NotificationTemplate.CASE_STATUS_UPDATED
+    if template is None:
+        return
+    # CLOSED cases normally reject new family notifications at the API; queue before the status commit lands.
+    notification_service.enqueue_event(
+        db,
+        case,
+        template,
+        channels=[NotificationChannel.SMS, NotificationChannel.EMAIL, NotificationChannel.PUSH],
+        actor_user_id=actor_id,
+        idempotency_suffix=f"{previous}:{target}:{case.version}",
+    )
+
+
 def check_version(case: Case, expected: int | None) -> None:
     if expected is not None and expected != case.version:
         raise Conflict(
@@ -134,6 +163,7 @@ def _apply_transition(
         before={"status": previous}, after={"status": target, "match_id": match_id, "evidence_recorded": bool(evidence)},
         reason=reason,
     )
+    _queue_lifecycle_notification(db, case, previous=previous, target=target, actor_id=actor.id)
 
 
 def _confirmed_match_for(db: Session, case: Case, match_id: uuid.UUID) -> CaseMatch:
@@ -309,7 +339,7 @@ def _change_custody(db: Session, actor: User, spec: CaseTypeSpec, case_id: uuid.
 
 
 def list_notes(db: Session, actor: User, case_id: uuid.UUID, *, limit: int, offset: int) -> tuple[list[CaseNote], int]:
-    require_permission(actor, Permission.CASE_READ)
+    require_permission(actor, Permission.CASE_READ, allow_public=True)
     load_case(db, actor, case_id)
     conditions = [CaseNote.case_id == case_id]
     if not has_permission(actor, Permission.NOTE_SENSITIVE):
@@ -336,7 +366,7 @@ def find_note_by_client_record(
 def add_note(
     db: Session, actor: User, case_id: uuid.UUID, req: NoteCreate, *, idempotency_key: str | None = None
 ) -> tuple[CaseNote, bool]:
-    require_permission(actor, Permission.NOTE_CREATE)
+    require_permission(actor, Permission.NOTE_CREATE, allow_public=True)
     load_case(db, actor, case_id)
     if req.client_record_id is not None:
         existing = find_note_by_client_record(
@@ -429,7 +459,7 @@ def _add_note(db: Session, actor: User, case_id: uuid.UUID, req: NoteCreate, not
 
 
 def get_history(db: Session, actor: User, case_id: uuid.UUID) -> CaseHistory:
-    require_permission(actor, Permission.CASE_READ)
+    require_permission(actor, Permission.CASE_READ, allow_public=True)
     load_case(db, actor, case_id)
     statuses = list(
         db.scalars(
@@ -438,19 +468,24 @@ def get_history(db: Session, actor: User, case_id: uuid.UUID) -> CaseHistory:
             .order_by(CaseStatusHistory.created_at, CaseStatusHistory.id)
         )
     )
-    assignments = list(
-        db.scalars(
-            select(CaseAssignment)
-            .where(CaseAssignment.case_id == case_id)
-            .order_by(CaseAssignment.assigned_at, CaseAssignment.id)
-        )
-    )
     status_views = [StatusHistoryRead.model_validate(row) for row in statuses]
     if not has_permission(actor, Permission.NOTE_SENSITIVE):
         status_views = [v.model_copy(update={"verification_evidence": None}) for v in status_views]
+    # PUBLIC citizens see status history only; assignment trails remain staff-facing.
+    if Role(actor.role) is Role.PUBLIC:
+        assignments: list[AssignmentRead] = []
+    else:
+        assignment_rows = list(
+            db.scalars(
+                select(CaseAssignment)
+                .where(CaseAssignment.case_id == case_id)
+                .order_by(CaseAssignment.assigned_at, CaseAssignment.id)
+            )
+        )
+        assignments = [AssignmentRead.model_validate(row) for row in assignment_rows]
     return CaseHistory(
         status_history=status_views,
-        assignments=[AssignmentRead.model_validate(row) for row in assignments],
+        assignments=assignments,
     )
 
 

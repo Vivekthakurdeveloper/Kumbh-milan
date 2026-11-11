@@ -1,10 +1,10 @@
 # API inventory
 
-Source of truth: the FastAPI application. A local import of the current source produced **81** OpenAPI operations on **61** paths. **79** of those operations are under `/api/v1`. The other two are `GET /health` and `GET /ready`. `GET /metrics` is intentionally omitted from the schema and requires `METRICS_TOKEN` when that token is set.
+Source of truth: the FastAPI application. A local import of the current source produced **110** OpenAPI operations on **88** paths (Phase 4). Operations under `/api/v1` include staff APIs plus the citizen public portal. The other two top-level routes are `GET /health` and `GET /ready`. `GET /metrics` is intentionally omitted from the schema and requires `METRICS_TOKEN` when that token is set.
 
 The previously running image was not queried. It was built before this source and its container is stopped, so its older operation count is not a current measurement.
 
-## Public
+## Public (unauthenticated or citizen token)
 
 | Method | Path | Auth |
 |---|---|---|
@@ -12,6 +12,10 @@ The previously running image was not queried. It was built before this source an
 | GET | `/ready` | None. Dependency names only, no secrets |
 | POST | `/api/v1/auth/login` | None. Rate limited |
 | POST | `/api/v1/auth/refresh` | Refresh token |
+| POST | `/api/v1/public/otp/*`, `/public/status/*` | None (OTP); status JWT for GET status |
+| POST | `/api/v1/public/missing-persons`, `/public/sightings` | `X-Verified-Mobile-Token` |
+| GET | `/api/v1/public/information` | None |
+| POST/DELETE | `/api/v1/devices/push-token` | Staff JWT or citizen status JWT |
 
 ## Authenticated groups
 
@@ -23,7 +27,9 @@ Every other `/api/v1` operation requires a bearer access token. Role checks are 
 | Stations and users | List, create, update, assignable officers, password reset |
 | Locations | Read and administer reference places |
 | Case types | Create, list, read, and update missing persons, found persons, lost items, and found items; assign and change status; found-item custody |
-| Shared cases | Search, nearby, map, notes, history, contact reveal, attachments, matches, notifications |
+| Shared cases | Search, nearby, map, notes, history, contact reveal, attachments, matches, notifications, public-review |
+| Sightings | Station-scoped list/detail/photo |
+| Public information admin | Create/update/publish/unpublish |
 | Mobile sync | `POST /sync/push`, `GET /sync/pull`, `GET /sync/status` (see [MOBILE_SYNC.md](MOBILE_SYNC.md)) |
 | Audit | List audit events |
 | Retention | Policies, plan, approve, execute, cancel, legal holds |

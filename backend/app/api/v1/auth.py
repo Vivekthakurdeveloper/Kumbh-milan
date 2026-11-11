@@ -9,11 +9,15 @@ from app.schemas.admin import UserRead
 from app.auth import mfa
 from app.schemas.auth import (
     ChangePasswordRequest,
+    ForgotPasswordRequest,
     LoginRequest,
     MeResponse,
+    MessageResponse,
     MfaConfirmRequest,
     MfaEnrollResponse,
     RefreshRequest,
+    RegisterRequest,
+    ResetPasswordRequest,
     TokenResponse,
 )
 
@@ -24,6 +28,28 @@ def _tokens(pair: auth_service.TokenPair) -> TokenResponse:
     return TokenResponse(access_token=pair.access_token, refresh_token=pair.refresh_token, expires_in=pair.expires_in)
 
 
+@router.post(
+    "/register",
+    response_model=TokenResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=errors(409, 422, 429),
+    summary="Register a PUBLIC citizen account",
+)
+def register(payload: RegisterRequest, request: Request, db: DbSession) -> TokenResponse:
+    """
+    Self-register with a mobile number as username. Role is always PUBLIC and cannot be chosen.
+    Returns the same token structure as login.
+    """
+    pair = auth_service.register_public_user(
+        db,
+        username=payload.username,
+        password=payload.password,
+        full_name=payload.full_name,
+        user_agent=request.headers.get("user-agent"),
+    )
+    return _tokens(pair)
+
+
 @router.post("/login", response_model=TokenResponse, responses=errors(401, 422, 429))
 def login(payload: LoginRequest, request: Request, db: DbSession) -> TokenResponse:
     """Exchange username and password for a 15-minute access token and a rotating refresh token."""
@@ -31,6 +57,33 @@ def login(payload: LoginRequest, request: Request, db: DbSession) -> TokenRespon
         db, username=payload.username, password=payload.password, user_agent=request.headers.get("user-agent")
     )
     return _tokens(pair)
+
+
+@router.post(
+    "/forgot-password",
+    response_model=MessageResponse,
+    responses=errors(422, 429),
+    summary="Request a password reset token for a PUBLIC account",
+)
+def forgot_password(payload: ForgotPasswordRequest, db: DbSession) -> MessageResponse:
+    """
+    Always returns the same message whether or not the account exists.
+    When a PUBLIC account matches, a single-use reset token is stored as a hash and SMS delivery
+    is attempted through the configured notification provider. Delivery is a deployment dependency.
+    """
+    message = auth_service.request_password_reset(db, username=payload.username)
+    return MessageResponse(message=message)
+
+
+@router.post(
+    "/reset-password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=errors(401, 422, 429),
+    summary="Reset a PUBLIC account password with a one-time token",
+)
+def reset_password(payload: ResetPasswordRequest, db: DbSession) -> None:
+    """Validate the reset token, set a new password, and revoke every existing session."""
+    auth_service.reset_password(db, token=payload.token, new_password=payload.new_password)
 
 
 @router.post("/refresh", response_model=TokenResponse, responses=errors(401, 422))

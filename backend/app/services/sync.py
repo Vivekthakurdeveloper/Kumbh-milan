@@ -217,7 +217,7 @@ def _update_case_record(
         )
 
     if record.base_version != case.version:
-        read = case_service.to_read(db, case, spec)
+        read = case_service.to_read(db, case, spec, actor=user)
         return SyncRecordResult(
             client_record_id=record.client_record_id,
             operation=record.operation,
@@ -457,7 +457,7 @@ def pull(
     for case in rows:
         # Reload with details via repository path used elsewhere.
         full = load_case(db, user, case.id)
-        read = case_service.to_read(db, full)
+        read = case_service.to_read(db, full, actor=user)
         items.append(
             SyncPullItem(
                 case=read.model_dump(mode="json"),

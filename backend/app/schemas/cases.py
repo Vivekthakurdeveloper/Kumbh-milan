@@ -6,12 +6,14 @@ from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from app.models.enums import (
     AgeGroup,
+    CaseSource,
     CaseStatus,
     CaseType,
     CommunicationStatus,
     CoordinateSource,
     CustodyStatus,
     Gender,
+    PublicReviewStatus,
     UrgencyLevel,
 )
 from app.schemas.common import (
@@ -104,6 +106,8 @@ class CaseRead(ReadModel):
     case_number: str
     case_type: CaseType
     status: CaseStatus
+    source: CaseSource = CaseSource.STAFF
+    public_review_status: PublicReviewStatus | None = None
     urgency_level: UrgencyLevel | None
     station_id: uuid.UUID
     reported_by_user_id: uuid.UUID
@@ -115,6 +119,13 @@ class CaseRead(ReadModel):
     longitude: float | None = None
     coordinate_source: CoordinateSource | None = None
     coordinate_accuracy_m: float | None = None
+    in_scope: bool = Field(
+        description="True when the case belongs to the caller's operational station scope (or is owned by a PUBLIC reporter)",
+    )
+    verification_evidence: str | None = Field(
+        None,
+        description="Latest handover/reunification verification comment from status history, when the caller may see it",
+    )
     created_at: datetime
     updated_at: datetime
     closed_at: datetime | None
@@ -131,6 +142,7 @@ class CaseSummary(ReadModel):
     status: CaseStatus
     urgency_level: UrgencyLevel | None
     station_id: uuid.UUID
+    reported_by_user_id: uuid.UUID
     assigned_to_user_id: uuid.UUID | None
     title: str | None
     location: str | None

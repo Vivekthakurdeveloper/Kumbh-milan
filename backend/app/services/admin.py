@@ -33,6 +33,11 @@ def _commit_unique(db: Session) -> None:
 
 
 def _validate_role_fields(db: Session, role: Role, station_id: uuid.UUID | None, badge: str | None) -> None:
+    if role is Role.PUBLIC:
+        raise ValidationFailed(
+            "PUBLIC accounts must self-register; administrators cannot create them",
+            code="public_role_forbidden",
+        )
     if role is not Role.ADMIN:
         if station_id is None:
             raise ValidationFailed("station_id is required for officers and help-desk operators", code="station_required")

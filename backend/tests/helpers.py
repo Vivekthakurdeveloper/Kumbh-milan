@@ -65,6 +65,19 @@ def create_station(code: str, kind: StationKind = StationKind.POLICE_STATION) ->
         return station.id
 
 
+def configure_public_intake(helpdesk: Actor) -> None:
+    """Point public portal intake at the test help-desk actor/station."""
+    from app.config import get_settings
+    from app.notifications import reset_provider_cache
+
+    settings = get_settings()
+    settings.public_intake_user_id = helpdesk.id
+    settings.public_intake_station_id = helpdesk.station_id
+    settings.public_security_secret = "test-public-security-secret-32chars"
+    settings.notification_provider = "mock"
+    reset_provider_cache()
+
+
 def make_actors(client: TestClient) -> Actors:
     station_a = create_station("HKP-01")
     station_b = create_station("KNK-02", StationKind.HELP_DESK)
@@ -81,7 +94,9 @@ def make_actors(client: TestClient) -> Actors:
         user_id = create_user(name, role, station, badge)
         headers, refresh = login(client, name)
         built[name] = Actor(user_id, name, station, headers, refresh)
-    return Actors(station_a=station_a, station_b=station_b, **built)
+    actors = Actors(station_a=station_a, station_b=station_b, **built)
+    configure_public_intake(actors.helpdesk)
+    return actors
 
 
 MISSING_PERSON = {

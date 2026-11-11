@@ -9,6 +9,7 @@ _DESCRIPTIONS = {
     415: "Unsupported media type",
     422: "Validation failed",
     429: "Rate limited or temporarily locked",
+    503: "Service temporarily unavailable",
 }
 
 

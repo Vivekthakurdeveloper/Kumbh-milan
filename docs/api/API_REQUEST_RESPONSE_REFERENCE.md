@@ -110,9 +110,65 @@ A case id outside the caller's scope, or of a different type than the URL's `{ty
 
 ## 2. Authentication
 
+### Endpoint: Register (PUBLIC) — `POST /api/v1/auth/register` *(new)*
+
+**Purpose:** citizen self-registration without staff assistance. **Auth:** none. **Role assigned:** always `PUBLIC` (clients cannot choose or submit a role). **Rate limit:** `RATE_LIMIT_REGISTER_PER_MINUTE` per IP (fail-closed).
+
+**Request body:**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `username` | string | yes | Digits only, 10–15 chars. Treated as a mobile number and stored as E.164 digits without `+` (e.g. `9876543210` → `919876543210`). |
+| `password` | string | yes | Same strength rules as staff passwords (`PASSWORD_MIN_LENGTH`, mixed character classes). |
+| `full_name` | string | yes | 2–200 chars. |
+
+<!-- validate: app.schemas.auth:RegisterRequest -->
+```json
+{"username": "9876543210", "password": "SecurePassword123", "full_name": "Test User"}
+```
+
+**Success 201:** `TokenResponse` (same structure as login). **Errors:** `409 duplicate`, `422 validation_failed` / `weak_password` / `invalid_phone`, `429 too_many_requests`.
+
+**`GET /auth/me` for PUBLIC:** `role = "PUBLIC"`, `permissions = []`. Allowed citizen case endpoints are enforced by a default-deny route allowlist plus `reported_by_user_id` ownership, not by staff permission strings.
+
+**Status:** Newly added — tested.
+
+### Endpoint: Forgot password — `POST /api/v1/auth/forgot-password` *(new)*
+
+**Purpose:** start self-service password reset for PUBLIC accounts. **Auth:** none. **Rate limit:** `RATE_LIMIT_FORGOT_PASSWORD_PER_HOUR` per IP (fail-closed).
+
+<!-- validate: app.schemas.auth:ForgotPasswordRequest -->
+```json
+{"username": "9876543210"}
+```
+
+**Success 200** (identical for existing PUBLIC, non-PUBLIC, and unknown accounts):
+
+<!-- validate: app.schemas.auth:MessageResponse -->
+```json
+{"message": "If an account exists, password reset instructions will be sent."}
+```
+
+When a matching active PUBLIC user exists, a single-use opaque token is stored as a SHA-256 hash (`password_reset_tokens`) and SMS delivery is attempted through the configured notification provider (`NotificationTemplate.PASSWORD_RESET`). **Delivery dependency:** without MSG91/templates (or a local mock/console provider), the secure token workflow still exists but SMS is not operational. Tokens are never returned in the API response or audit log.
+
+**Status:** Newly added — tested (token workflow); SMS delivery blocked until provider credentials/templates are configured.
+
+### Endpoint: Reset password — `POST /api/v1/auth/reset-password` *(new)*
+
+**Purpose:** complete self-service reset with the opaque token. **Auth:** none. **Rate limit:** `RATE_LIMIT_RESET_PASSWORD_PER_HOUR` per IP (fail-closed).
+
+<!-- validate: app.schemas.auth:ResetPasswordRequest -->
+```json
+{"token": "opaque-reset-token-sample-value", "new_password": "NewSecurePassword123"}
+```
+
+**Success 204.** Updates the password with Argon2id, consumes the token (single-use), and revokes every session (`token_version` bump). **Errors:** `401 invalid_reset_token`, `422 weak_password`, `429`.
+
+**Status:** Newly added — tested.
+
 ### Endpoint: Login — `POST /api/v1/auth/login`
 
-**Purpose:** login screen. **Auth:** none. **Rate limit:** 30/min per client IP (fail-closed if the shared limiter is down → `503`). **Lockout:** 5 failed attempts for a username within 15 minutes → `429 account_temporarily_locked` (settings `LOGIN_MAX_FAILURES`, `LOGIN_LOCKOUT_MINUTES`).
+**Purpose:** login screen for staff **and** PUBLIC citizens (mobile username + password). **Auth:** none. **Rate limit:** 30/min per client IP (fail-closed if the shared limiter is down → `503`). **Lockout:** 5 failed attempts for a username within 15 minutes → `429 account_temporarily_locked` (settings `LOGIN_MAX_FAILURES`, `LOGIN_LOCKOUT_MINUTES`).
 
 **Request body** (`application/json`):
 
@@ -564,6 +620,8 @@ Found item request:
   "longitude": 78.1711,
   "coordinate_source": "DEVICE_GPS",
   "coordinate_accuracy_m": 12.5,
+  "in_scope": true,
+  "verification_evidence": null,
   "created_at": "2026-10-29T02:15:03.512000Z",
   "updated_at": "2026-10-29T02:15:03.512000Z",
   "closed_at": null,
@@ -673,7 +731,14 @@ URL-encode `+` in offsets as `%2B`.
 
 ### 6.5 Endpoint: Case details — `GET /api/v1/cases/{type}/{case_id}`
 
-**Success 200:** `{Type}CaseRead` (as in §6.3). **Errors:** `404 case_not_found` (out of scope, wrong type, or unknown), `422` (malformed uuid). **Status:** Implemented — tested.
+**Success 200:** `{Type}CaseRead` (as in §6.3), including:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `in_scope` | bool | `true` when the case belongs to the caller's operational station (admin: always true; PUBLIC: owned cases). `false` means cross-station read-only context where visible. |
+| `verification_evidence` | string \| null | Latest `RESOLVED` status-history verification/handover comment. Returned only to roles with `note:sensitive` (police/admin); help desk and PUBLIC receive `null`. |
+
+**Errors:** `404 case_not_found` (out of scope, wrong type, or unknown), `422` (malformed uuid). **Status:** Modified — tested.
 
 ### 6.6 Endpoint: Edit case — `PATCH /api/v1/cases/{type}/{case_id}`
 
@@ -849,6 +914,7 @@ Release (handover):
       "status": "ASSIGNED",
       "urgency_level": "HIGH",
       "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
+      "reported_by_user_id": "1b2c3d4e-5f60-4718-89ab-cdef01234567",
       "assigned_to_user_id": "9a1e4b7c-2d3f-4a5b-8c6d-7e8f9a0b1c2d",
       "title": "Sample Child Name",
       "location": "Near the clock tower, Har Ki Pauri",
@@ -878,6 +944,7 @@ Release (handover):
 | `age_group` | From person details; `null` for item cases. |
 | `gender` | Missing person: `gender`; found person: `estimated_gender`; item cases: `null`. Redacted on out-of-scope counterparts. |
 | `event_at` | `last_seen_at` / `found_at`. |
+| `reported_by_user_id` | Reporter user id. For PUBLIC citizens this is their own account; list results are ownership-filtered. |
 | `in_scope` | `false` only with `all_stations=true` for cases the caller cannot open. Show as read-only; `GET /cases/{id}` will 404. |
 
 Example: `GET /api/v1/cases?q=%22red%20frock%22&case_type=FOUND_PERSON&all_stations=true&status=OPEN`
@@ -902,6 +969,7 @@ Uses the case's own coordinates when recorded, otherwise its `location_id`'s coo
     "status": "OPEN",
     "urgency_level": "CRITICAL",
     "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
+    "reported_by_user_id": "1b2c3d4e-5f60-4718-89ab-cdef01234567",
     "assigned_to_user_id": null,
     "title": null,
     "location": "Bus stand, Sector 2",
@@ -1187,6 +1255,7 @@ Each case is resolved separately; resolving one does not resolve its counterpart
     "match_domain": "PERSON",
     "status": "PROPOSED",
     "source": "AUTOMATIC",
+    "review_stage": "AWAITING_FIRST_APPROVAL",
     "score": 0.9424,
     "confidence_band": "HIGH",
     "reasons": [
@@ -1208,6 +1277,7 @@ Each case is resolved separately; resolving one does not resolve its counterpart
       "status": "OPEN",
       "urgency_level": "HIGH",
       "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
+      "reported_by_user_id": "1b2c3d4e-5f60-4718-89ab-cdef01234567",
       "assigned_to_user_id": null,
       "title": null,
       "location": "Near Malviya Dweep bridge",
@@ -1251,6 +1321,7 @@ Returns only matches that touch at least one case visible to the caller — the 
       "match_domain": "PERSON",
       "status": "PROPOSED",
       "source": "MANUAL",
+      "review_stage": "AWAITING_FIRST_APPROVAL",
       "score": null,
       "confidence_band": null,
       "reasons": null,
@@ -1266,6 +1337,7 @@ Returns only matches that touch at least one case visible to the caller — the 
         "status": "OPEN",
         "urgency_level": "CRITICAL",
         "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
+        "reported_by_user_id": "1b2c3d4e-5f60-4718-89ab-cdef01234567",
         "assigned_to_user_id": null,
         "title": "Sample Child Name",
         "location": "Har Ki Pauri ghat steps",
@@ -1286,6 +1358,7 @@ Returns only matches that touch at least one case visible to the caller — the 
         "status": "OPEN",
         "urgency_level": null,
         "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
+        "reported_by_user_id": "1b2c3d4e-5f60-4718-89ab-cdef01234567",
         "assigned_to_user_id": null,
         "title": null,
         "location": "Brahmakund",
@@ -1331,15 +1404,71 @@ Returns only matches that touch at least one case visible to the caller — the 
   "source": "FACE",
   "review_stage": "AWAITING_FIRST_APPROVAL",
   "score": 0.8351,
+  "confidence_band": "HIGH",
+  "reasons": null,
+  "engine_version": "opencv_sface_2021dec",
   "face_similarity": 0.8351,
   "face_similarity_threshold": 0.363,
   "face_model": "opencv_sface_2021dec",
   "left_case_id": "7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11",
   "right_case_id": "2e9f8a7b-6c5d-4e3f-8a1b-0c9d8e7f6a5b",
+  "left_case_version": 2,
+  "right_case_version": 1,
   "left_attachment_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
   "right_attachment_id": "ffffffff-0000-1111-2222-333333333333",
-  "left_case": {"id": "7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11", "case_number": "KSLF-MP-2026-000042", "case_type": "MISSING_PERSON", "status": "OPEN", "in_scope": true},
-  "right_case": {"id": "2e9f8a7b-6c5d-4e3f-8a1b-0c9d8e7f6a5b", "case_number": "KSLF-FP-2026-000018", "case_type": "FOUND_PERSON", "status": "OPEN", "in_scope": true},
+  "left_case": {
+    "id": "7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11",
+    "case_number": "KSLF-MP-2026-000042",
+    "case_type": "MISSING_PERSON",
+    "status": "OPEN",
+    "urgency_level": "CRITICAL",
+    "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
+    "reported_by_user_id": "1b2c3d4e-5f60-4718-89ab-cdef01234567",
+    "assigned_to_user_id": null,
+    "title": "Sample Child Name",
+    "location": "Har Ki Pauri ghat steps",
+    "location_id": null,
+    "approximate_age": 7,
+    "age_group": "CHILD",
+    "gender": "MALE",
+    "event_at": null,
+    "version": 2,
+    "created_at": "2026-10-29T02:15:03.512000Z",
+    "updated_at": "2026-11-05T10:00:00Z",
+    "in_scope": true
+  },
+  "right_case": {
+    "id": "2e9f8a7b-6c5d-4e3f-8a1b-0c9d8e7f6a5b",
+    "case_number": "KSLF-FP-2026-000018",
+    "case_type": "FOUND_PERSON",
+    "status": "OPEN",
+    "urgency_level": "HIGH",
+    "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
+    "reported_by_user_id": "1b2c3d4e-5f60-4718-89ab-cdef01234567",
+    "assigned_to_user_id": null,
+    "title": null,
+    "location": "Near Malviya Dweep bridge",
+    "location_id": null,
+    "approximate_age": 7,
+    "age_group": "CHILD",
+    "gender": "MALE",
+    "event_at": "2026-10-29T03:22:00Z",
+    "version": 1,
+    "created_at": "2026-10-29T03:30:00Z",
+    "updated_at": "2026-10-29T03:30:00Z",
+    "in_scope": true
+  },
+  "proposed_by_user_id": null,
+  "rationale": null,
+  "first_approved_by_user_id": null,
+  "first_approved_at": null,
+  "first_approval_evidence": null,
+  "reviewed_by_user_id": null,
+  "reviewed_at": null,
+  "review_evidence": null,
+  "revoked_by_user_id": null,
+  "revoked_at": null,
+  "revocation_reason": null,
   "created_at": "2026-11-05T10:00:00Z"
 }
 ```
@@ -1363,7 +1492,7 @@ Returns only matches that touch at least one case visible to the caller — the 
 
 <!-- validate: list[app.schemas.faces:MatchHistoryEvent] -->
 ```json
-[{"id": "…", "action": "MATCH_FIRST_APPROVAL", "actor_user_id": "…", "after_state": {"decision": "CONFIRMED"}, "reason": null, "created_at": "2026-11-05T10:05:00Z"}]
+[{"id": "11111111-2222-3333-4444-555555555555", "action": "MATCH_FIRST_APPROVAL", "actor_user_id": "9a1e4b7c-2d3f-4a5b-8c6d-7e8f9a0b1c2d", "after_state": {"decision": "CONFIRMED"}, "reason": null, "created_at": "2026-11-05T10:05:00Z"}]
 ```
 
 **Status:** Implemented — tested.
@@ -1374,7 +1503,7 @@ Returns only matches that touch at least one case visible to the caller — the 
 
 <!-- validate: app.schemas.common:Page[app.schemas.faces:StaffNotificationRead] -->
 ```json
-{"items": [{"id": "…", "kind": "MATCH_CANDIDATE", "status": "UNREAD", "match_id": "…", "link": "/matches/…", "created_at": "2026-11-05T10:00:01Z", "read_at": null}], "total": 1, "limit": 25, "offset": 0}
+{"items": [{"id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "kind": "MATCH_CANDIDATE", "status": "UNREAD", "match_id": "8b7a6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d", "link": "/matches/8b7a6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d", "created_at": "2026-11-05T10:00:01Z", "read_at": null}], "total": 1, "limit": 25, "offset": 0}
 ```
 
 Mark read: `POST /api/v1/staff-notifications/{id}/read` → `StaffNotificationRead`. **Status:** Implemented — tested.
@@ -1434,9 +1563,9 @@ Mark read: `POST /api/v1/staff-notifications/{id}/read` → `StaffNotificationRe
 
 ---
 
-## 9. Notifications (SMS/WhatsApp to families and owners)
+## 9. Notifications (SMS/WhatsApp/email/push to families and owners)
 
-There are **no staff/in-app notifications, email, or push**. This outbox queues PII-free messages to a consenting family member or owner. **No real provider is integrated**, and staging/production configuration must be `NOTIFICATION_PROVIDER=disabled`, so messages stay `PENDING` there (blocked; see gap G-9).
+The outbox queues bilingual lifecycle messages to a consenting, verified recipient. Channels: `SMS`, `WHATSAPP`, `EMAIL`, `PUSH`. Adapters exist for MSG91, SMTP, and Firebase FCM (optional `.[push]` extra). Staging/production should keep `NOTIFICATION_PROVIDER=disabled` (or `mock` in non-prod) until MSG91 DLT templates, SMTP credentials, and Firebase/APNs are approved. Automated tests use mock/disabled providers only — **live delivery is not verified**.
 
 ### Endpoint: Queue a message — `POST /api/v1/cases/{case_id}/notifications`
 
@@ -1494,9 +1623,20 @@ Plain array of `NotificationRead`, oldest first. **Status:** Implemented — tes
 
 ## 10. Dashboard
 
-### Endpoint: Summary — `GET /api/v1/dashboard/summary`
+### Endpoint: Summary — `GET /api/v1/dashboard/summary` *(modified)*
 
-**Roles:** all. Counts only cases visible to the caller and **excludes archived** cases. "Active" = `OPEN`, `UNDER_REVIEW`, `ASSIGNED`, `MATCH_FOUND`, `REOPENED`.
+**Roles:** staff with `case:read` (PUBLIC is denied). Counts only cases visible to the caller and **excludes archived** cases. "Active" = `OPEN`, `UNDER_REVIEW`, `ASSIGNED`, `MATCH_FOUND`, `REOPENED`.
+
+**Optional query (Asia/Kolkata calendar dates):**
+
+| Param | Type | Notes |
+|---|---|---|
+| `from` | date (`YYYY-MM-DD`) | Inclusive start. Must be sent with `to`. |
+| `to` | date (`YYYY-MM-DD`) | Inclusive end (implemented as next-day exclusive upper bound). |
+
+Without parameters, behaviour is unchanged: point-in-time active/status counts and `registered_today` = since Asia/Kolkata midnight. With both parameters, the same case-created window filters dashboard metrics. Reversed ranges → `422 invalid_range`.
+
+Example: `GET /api/v1/dashboard/summary?from=2026-11-01&to=2026-11-10`
 
 <!-- validate: app.schemas.dashboard:DashboardSummary -->
 ```json
@@ -1514,7 +1654,7 @@ Plain array of `NotificationRead`, oldest first. **Status:** Implemented — tes
 }
 ```
 
-**Important:** keys with a zero count are **omitted** from `active_by_type` and `by_status` (e.g. no `REOPENED` key above). Default missing keys to 0. `active_by_type` only counts active statuses, so it gives open missing persons etc., not totals. `pending_match_reviews` counts `PROPOSED` matches touching any visible case. **Not available:** totals per type across all statuses, counts by location/sector/station/date, recent activity, per-officer workload (gap G-8). **Status:** Partial — implemented and tested for what it returns.
+**Important:** keys with a zero count are **omitted** from `active_by_type` and `by_status` (e.g. no `REOPENED` key above). Default missing keys to 0. `active_by_type` only counts active statuses, so it gives open missing persons etc., not totals. `pending_match_reviews` counts `PROPOSED` matches touching any visible case. Field names are unchanged. **Status:** Modified — date filtering tested.
 
 ---
 
@@ -1642,6 +1782,61 @@ Example: `GET /api/v1/audit-events?case_id=6f5e4d3c-2b1a-4098-8f7e-6d5c4b3a2918&
 
 ---
 
+## 13b. Public citizen portal
+
+### OTP — `POST /api/v1/public/otp/request` / `verify`
+
+Request (report or sighting only; status uses the dedicated endpoints):
+
+<!-- validate: app.schemas.public:OtpRequest -->
+```json
+{"mobile_number": "9876543210", "purpose": "REPORT_MISSING", "locale": "hi"}
+```
+
+Success always looks like an SMS was accepted (anti-enumeration for status uses the same shape). Verify returns `verified_mobile_token` for header `X-Verified-Mobile-Token`.
+
+### Public missing person — `POST /api/v1/public/missing-persons`
+
+`multipart/form-data` with `report` (JSON string of `PublicMissingPersonCreate`) and optional `photo`. Headers: `X-Verified-Mobile-Token`, `Idempotency-Key`. Success `201` (or `200` with `Idempotent-Replayed: true`):
+
+```json
+{"case_id": "MP-2026-000123", "status": "PENDING_VERIFICATION", "message": "…"}
+```
+
+### Status access — `POST /api/v1/public/status/request-otp` → `verify-otp` → `GET /api/v1/public/cases/{case_id}/status`
+
+Request OTP always returns `OTP_SENT` whether or not the case/mobile pair exists. Verify issues a short-lived JWT with `scope: status:read`. GET returns only:
+
+```json
+{"case_id": "MP-2026-000123", "status": "UNDER_REVIEW", "updated_at": "2026-11-07T10:00:00Z", "message": "…"}
+```
+
+Never includes notes, contacts, staff, medical data, matches, or media.
+
+### Sightings — `POST /api/v1/public/sightings`
+
+Multipart `report` JSON (`PublicSightingCreate`) + optional `photo`. Requires verified-mobile token for `REPORT_SIGHTING`. Response acknowledges an `UNVERIFIED` sighting; case status is never changed. Staff list/detail/photo under `/api/v1/sightings`.
+
+### Public information — `GET /api/v1/public/information`
+
+Unauthenticated list of currently published bilingual items. Admin create/update/publish/unpublish under `/api/v1/admin/public-information` (`public_information:manage` only).
+
+### Push tokens — `POST|DELETE /api/v1/devices/push-token`
+
+Staff Bearer JWT, or citizen status JWT (optionally with `case_id` on register). Body includes `platform` + `token`. Success `204`.
+
+### Public review — `POST /api/v1/cases/{case_id}/public-review`
+
+```json
+{"decision": "VERIFIED", "reason": "Documents checked at desk"}
+```
+
+Requires `case:review`. Approval may queue `CASE_APPROVED`; rejected/unverified reports are never represented as police-verified.
+
+**Status (Phase 4 public):** Implemented — tested (mock providers). Live MSG91/SMTP/FCM delivery not verified.
+
+---
+
 ## 14. Error code reference
 
 Every `code` the backend can return, by HTTP status. Codes are stable identifiers; messages are English and may change. Map codes to UI copy (and Hindi translations) in the frontend.
@@ -1673,5 +1868,8 @@ Every `code` the backend can return, by HTTP status. Codes are stable identifier
 | `case_create` | `POST /cases/{type}` | 60 | user |
 | `search` | `GET /cases`, `/cases/{type}`, `/cases/nearby`, `/cases/map` | 180 | user |
 | `general` | every `/api/v1` request (in addition) | 600 | user (IP if unauthenticated) |
+| `public_otp` | `/public/otp/*`, `/public/status/*-otp` | `RATE_LIMIT_PUBLIC_OTP_PER_MINUTE` (default 10) | client IP (+ recipient hash in OTP service) |
+| `public_submit` | `/public/missing-persons`, `/public/sightings` | `RATE_LIMIT_PUBLIC_SUBMIT_PER_MINUTE` (default 20) | client IP |
+| `public_status` | `/public/cases/{id}/status` | `RATE_LIMIT_PUBLIC_STATUS_PER_MINUTE` (default 30) | client IP |
 
 No `X-RateLimit-*` headers are sent; only `Retry-After` on 429.

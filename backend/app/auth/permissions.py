@@ -34,6 +34,8 @@ class Permission(StrEnum):
     MATCH_REVIEW = "match:review"
 
     NOTIFICATION_SEND = "notification:send"
+    PUBLIC_INFORMATION_MANAGE = "public_information:manage"
+    SIGHTING_READ = "sighting:read"
 
 
 _HELP_DESK = frozenset(
@@ -47,6 +49,7 @@ _HELP_DESK = frozenset(
         Permission.ATTACHMENT_DOWNLOAD,
         Permission.MATCH_PROPOSE,
         Permission.NOTIFICATION_SEND,
+        Permission.SIGHTING_READ,
     }
 )
 
@@ -65,13 +68,23 @@ _POLICE = _HELP_DESK | frozenset(
 )
 
 _ADMIN = _POLICE | frozenset(
-    {Permission.USER_MANAGE, Permission.STATION_MANAGE, Permission.LOCATION_MANAGE, Permission.RETENTION_MANAGE, Permission.AUDIT_READ}
+    {
+        Permission.USER_MANAGE,
+        Permission.STATION_MANAGE,
+        Permission.LOCATION_MANAGE,
+        Permission.RETENTION_MANAGE,
+        Permission.AUDIT_READ,
+        Permission.PUBLIC_INFORMATION_MANAGE,
+    }
 )
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.HELP_DESK_OPERATOR: _HELP_DESK,
     Role.POLICE_OFFICER: _POLICE,
     Role.ADMIN: _ADMIN,
+    # PUBLIC has no staff permissions. Allowed citizen endpoints are enforced by a
+    # separate route allowlist plus reporter-ownership checks in case_visibility_clause.
+    Role.PUBLIC: frozenset(),
 }
 
 
@@ -79,6 +92,14 @@ def has_permission(user: User, permission: Permission) -> bool:
     return permission in ROLE_PERMISSIONS.get(Role(user.role), frozenset())
 
 
-def require_permission(user: User, permission: Permission) -> None:
+def require_permission(user: User, permission: Permission, *, allow_public: bool = False) -> None:
+    """
+    Staff roles are checked against ROLE_PERMISSIONS.
+
+    PUBLIC has an empty permission set by design. When `allow_public=True`, the caller has already
+    been admitted by the PUBLIC route allowlist and must still pass ownership/scope checks.
+    """
+    if allow_public and Role(user.role) is Role.PUBLIC:
+        return
     if not has_permission(user, permission):
         raise Forbidden("You do not have permission to perform this action", code="permission_denied")

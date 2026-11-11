@@ -25,8 +25,10 @@ class ObjectStorage:
             config=Config(signature_version="s3v4", s3={"addressing_style": "path"}, retries={"max_attempts": 3}),
         )
         self.client = boto3.client("s3", endpoint_url=settings.s3_endpoint_url or None, **common)
+        # Prefer the browser-facing public endpoint so presigned URLs never embed docker-internal hosts.
         public_endpoint = settings.s3_public_endpoint_url or settings.s3_endpoint_url or None
         self.presign_client = boto3.client("s3", endpoint_url=public_endpoint, **common)
+        self.public_endpoint_url = public_endpoint
 
     def put(self, key: str, data: bytes, *, content_type: str, checksum_sha256: str) -> None:
         extra = {"ContentType": content_type, "Metadata": {"sha256": checksum_sha256}}

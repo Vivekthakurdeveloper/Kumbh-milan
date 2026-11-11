@@ -35,10 +35,13 @@ def case_visibility_clause(user: User) -> ColumnElement[bool]:
     ADMIN: every case.
     POLICE_OFFICER: own station, assigned to them, reported by them, or linked by a match to an own-station case.
     HELP_DESK_OPERATOR: own station only.
+    PUBLIC: only cases the citizen themselves reported (prevents IDOR across accounts).
     """
     role = Role(user.role)
     if role is Role.ADMIN:
         return true()
+    if role is Role.PUBLIC:
+        return and_(Case.reported_by_user_id == user.id, Case.archived_at.is_(None))
     if user.station_id is None:
         return false()
     if role is Role.HELP_DESK_OPERATOR:

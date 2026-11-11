@@ -43,13 +43,22 @@ def build_rules(settings: Settings) -> tuple[list[_Rule], Policy]:
     login = Policy("login", s.rate_limit_login_per_minute, 60, "ip", fail_closed=True)
     refresh = Policy("refresh", s.rate_limit_refresh_per_minute, 60, "ip", fail_closed=True)
     password = Policy("password_change", s.rate_limit_password_per_hour, 3600, "user_or_ip", fail_closed=True)
+    register = Policy("register", s.rate_limit_register_per_minute, 60, "ip", fail_closed=True)
+    forgot = Policy("forgot_password", s.rate_limit_forgot_password_per_hour, 3600, "ip", fail_closed=True)
+    reset = Policy("reset_password", s.rate_limit_reset_password_per_hour, 3600, "ip", fail_closed=True)
     upload = Policy("upload", s.rate_limit_upload_per_minute, 60, "user_or_ip")
     create = Policy("case_create", s.rate_limit_case_create_per_minute, 60, "user_or_ip")
     search = Policy("search", s.rate_limit_search_per_minute, 60, "user_or_ip")
+    public_otp = Policy("public_otp", s.rate_limit_public_otp_per_minute, 60, "ip", fail_closed=True)
+    public_submit = Policy("public_submit", s.rate_limit_public_submit_per_minute, 60, "ip", fail_closed=True)
+    public_status = Policy("public_status", s.rate_limit_public_status_per_minute, 60, "ip", fail_closed=True)
     general = Policy("general", s.rate_limit_per_minute, 60, "user_or_ip")
     case_types = r"(missing-persons|found-persons|lost-items|found-items)"
     rules = [
         _Rule("POST", re.compile(r"^/api/v1/auth/login$"), login),
+        _Rule("POST", re.compile(r"^/api/v1/auth/register$"), register),
+        _Rule("POST", re.compile(r"^/api/v1/auth/forgot-password$"), forgot),
+        _Rule("POST", re.compile(r"^/api/v1/auth/reset-password$"), reset),
         _Rule("POST", re.compile(r"^/api/v1/auth/refresh$"), refresh),
         _Rule("POST", re.compile(r"^/api/v1/auth/change-password$"), password),
         _Rule("POST", re.compile(r"^/api/v1/users/[^/]+/reset-password$"), password),
@@ -58,6 +67,11 @@ def build_rules(settings: Settings) -> tuple[list[_Rule], Policy]:
         _Rule("POST", re.compile(r"^/api/v1/sync/push$"), create),
         _Rule("GET", re.compile(rf"^/api/v1/cases(/{case_types}|/nearby|/map)?$"), search),
         _Rule("GET", re.compile(r"^/api/v1/sync/pull$"), search),
+        _Rule("POST", re.compile(r"^/api/v1/public/otp/(request|verify)$"), public_otp),
+        _Rule("POST", re.compile(r"^/api/v1/public/status/(request-otp|verify-otp)$"), public_otp),
+        _Rule("POST", re.compile(r"^/api/v1/public/missing-persons$"), public_submit),
+        _Rule("POST", re.compile(r"^/api/v1/public/sightings$"), public_submit),
+        _Rule("GET", re.compile(r"^/api/v1/public/cases/[^/]+/status$"), public_status),
     ]
     return rules, general
 

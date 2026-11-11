@@ -51,7 +51,7 @@ Totals: 12 Ready, 8 Partial, 2 Blocked.
 | Form fields | `username` (1–64; trimmed, case-insensitive), `password` (1–128) |
 | Data deps | None |
 | UI states | Submitting; `401 invalid_credentials` ("Incorrect username or password"; the same message for unknown and inactive users); `429 account_temporarily_locked` (5 failures in 15 min, locked 15 min by default); `429 too_many_requests` (30/min per IP) with `Retry-After` |
-| Missing APIs | Forgot password / self-service reset (G-13). Users must ask an admin. |
+| Missing APIs | Staff still use admin reset. PUBLIC citizens use `POST /auth/forgot-password` + `POST /auth/reset-password` (SMS delivery depends on notification provider). |
 | Readiness | **Ready** |
 
 ## 2. App shell, profile, change password

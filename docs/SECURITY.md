@@ -8,7 +8,9 @@ Argon2id hashes passwords. Access tokens are short-lived JWTs with issuer `kumbh
 
 `MFA_MODE=totp` adds a six-digit step-up header for admin password reset and API retention execution. The secret is encrypted with the contact Fernet key and returned only at enrollment. This TOTP implementation is not phishing-resistant. Production MFA is `BLOCKED` until an approved mechanism and recovery procedure exist. `MFA_MODE` stays `disabled` by default.
 
-There is no public self-service password reset.
+PUBLIC citizens can use `POST /api/v1/auth/forgot-password` and `POST /api/v1/auth/reset-password`. Reset tokens are random, single-use, time-limited, and stored only as SHA-256 hashes. Existing and non-existing usernames receive the same acknowledgement. SMS delivery uses the configured notification provider and `PASSWORD_RESET` template; without provider credentials/templates, the secure token workflow remains available but delivery is not operational. Staff accounts continue to use admin reset / change-password only.
+
+Citizen portal authentication uses purpose-bound OTP challenges and short-lived JWTs signed with `PUBLIC_SECURITY_SECRET` (falls back to `JWT_SECRET` only in local/test). Verified-mobile tokens are restricted to a purpose and mobile hash; status tokens are restricted to one case and `status:read`. OTP codes, mobiles, emails, and push tokens are never written to audit payloads or application logs.
 
 ## Authorization
 
@@ -35,7 +37,8 @@ The Redis rate-limit backend is shared across replicas. Compose now sets `REDIS_
 | Item | Status |
 |---|---|
 | Phishing-resistant production MFA and recovery | BLOCKED |
-| Real SMS/WhatsApp provider, DLT templates, consent approval | BLOCKED |
+| Live MSG91 / SMTP / FCM delivery (adapters present; credentials and DLT/APNs approval outstanding) | BLOCKED / NOT_VERIFIED |
+| Real SMS/WhatsApp DLT templates and consent programme approval | BLOCKED |
 | Legally approved retention periods | BLOCKED |
 | Key rotation of existing ciphertext | BLOCKED |
 | PostgreSQL row-level security in addition to service filters | Not added; service and query filters are the enforced control |

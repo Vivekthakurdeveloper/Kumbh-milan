@@ -1,9 +1,11 @@
 import hmac
+import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import AuditAction, record_audit
@@ -16,13 +18,17 @@ from app.auth.passwords import (
 )
 from app.auth.tokens import create_access_token, hash_token, new_refresh_token, parse_refresh_token
 from app.common.context import client_ip_var
-from app.common.errors import TooManyRequests, Unauthenticated, ValidationFailed
+from app.common.errors import Conflict, TooManyRequests, Unauthenticated, ValidationFailed
 from app.common.time import utcnow
 from app.config import get_settings
+from app.models import LoginAttempt, PasswordResetToken, RefreshToken, User
+from app.models.enums import NotificationChannel, NotificationTemplate, Role
+from app.notifications import ProviderError, get_provider, mask, normalise_phone, render
 from app.observability.metrics import AUTH_FAILURES
-from app.models import LoginAttempt, RefreshToken, User
 
 INVALID_CREDENTIALS = "Invalid username or password"
+FORGOT_PASSWORD_MESSAGE = "If an account exists, password reset instructions will be sent."
+INVALID_RESET_TOKEN = "Invalid or expired password reset token"
 
 
 @dataclass(frozen=True)
@@ -61,8 +67,20 @@ def _is_locked_out(db: Session, username: str) -> bool:
     return (failures or 0) >= settings.login_max_failures
 
 
+def _normalise_login_username(username: str) -> str:
+    """Lowercase staff usernames; canonicalize digit-only citizen mobiles to E.164 without '+'."""
+    cleaned = username.strip().lower()
+    if cleaned.isdigit():
+        try:
+            mobile, _ = _canonical_mobile_username(cleaned)
+            return mobile
+        except ValidationFailed:
+            return cleaned
+    return cleaned
+
+
 def login(db: Session, *, username: str, password: str, user_agent: str | None) -> TokenPair:
-    username = username.strip().lower()
+    username = _normalise_login_username(username)
     ip = client_ip_var.get()
     if _is_locked_out(db, username):
         AUTH_FAILURES.labels("locked_out").inc()
@@ -88,20 +106,7 @@ def login(db: Session, *, username: str, password: str, user_agent: str | None) 
 
     if needs_rehash(user.password_hash):
         user.password_hash = hash_password(password)
-    now = utcnow()
-    user.last_login_at = now
-    session = RefreshToken(
-        id=uuid.uuid4(),
-        user_id=user.id,
-        token_hash="",
-        rotation_count=0,
-        expires_at=now + timedelta(days=get_settings().refresh_token_ttl_days),
-        last_used_at=now,
-        user_agent=(user_agent or "")[:255] or None,
-        client_ip=ip,
-    )
-    db.add(session)
-    pair = _issue(db, user, session)
+    pair = _create_session(db, user, user_agent=user_agent)
     db.add(LoginAttempt(username=username, client_ip=ip, succeeded=True))
     record_audit(db, action=AuditAction.LOGIN_SUCCEEDED, entity_type="user", actor_user_id=user.id, entity_id=user.id)
     db.commit()
@@ -175,4 +180,204 @@ def change_password(db: Session, *, user: User, current_password: str, new_passw
     user.password_hash = hash_password(new_password)
     revoke_all_sessions(db, user, "password_changed")
     record_audit(db, action=AuditAction.PASSWORD_CHANGED, entity_type="user", actor_user_id=user.id, entity_id=user.id)
+    db.commit()
+
+
+def _canonical_mobile_username(username: str) -> tuple[str, str]:
+    """Return (username_digits, e164_phone). Username stores E.164 digits without '+'."""
+    settings = get_settings()
+    digits = "".join(ch for ch in username.strip() if ch.isdigit())
+    if len(digits) < 10 or len(digits) > 15:
+        raise ValidationFailed("username must be a valid mobile number", code="invalid_phone")
+    country = settings.notification_default_country_code.lstrip("+")
+    candidates: list[str] = []
+    # Prefer an already-international form so stored usernames (e.g. 9198…) do not get a second country prefix.
+    if digits.startswith(country) and len(digits) > len(country) + 6:
+        candidates.append(f"+{digits}")
+    candidates.append(digits)
+    for candidate in candidates:
+        phone = normalise_phone(candidate, settings.notification_default_country_code)
+        if phone is not None:
+            return phone.lstrip("+"), phone
+    raise ValidationFailed("username must be a valid mobile number", code="invalid_phone")
+
+
+def _create_session(db: Session, user: User, *, user_agent: str | None) -> TokenPair:
+    now = utcnow()
+    user.last_login_at = now
+    session = RefreshToken(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        token_hash="",
+        rotation_count=0,
+        expires_at=now + timedelta(days=get_settings().refresh_token_ttl_days),
+        last_used_at=now,
+        user_agent=(user_agent or "")[:255] or None,
+        client_ip=client_ip_var.get(),
+    )
+    db.add(session)
+    return _issue(db, user, session)
+
+
+def register_public_user(
+    db: Session, *, username: str, password: str, full_name: str, user_agent: str | None
+) -> TokenPair:
+    """Self-register a PUBLIC citizen account and issue the same token pair as login."""
+    mobile, phone = _canonical_mobile_username(username)
+    validate_new_password(password, username=mobile)
+    if db.scalar(select(User.id).where(User.username == mobile)):
+        raise Conflict("Username is already taken", code="duplicate")
+
+    user = User(
+        id=uuid.uuid4(),
+        full_name=full_name.strip(),
+        username=mobile,
+        phone_number=phone,
+        password_hash=hash_password(password),
+        role=Role.PUBLIC,
+        station_id=None,
+        is_active=True,
+    )
+    db.add(user)
+    try:
+        db.flush()  # Persist the user before audit FK / session rows reference user.id.
+    except IntegrityError as exc:
+        db.rollback()
+        raise Conflict("Username is already taken", code="duplicate") from exc
+
+    record_audit(
+        db,
+        action=AuditAction.PUBLIC_USER_REGISTERED,
+        entity_type="user",
+        entity_id=user.id,
+        actor_user_id=user.id,
+        after={"username": mobile, "role": Role.PUBLIC, "source": "self_registration"},
+    )
+    pair = _create_session(db, user, user_agent=user_agent)
+    db.add(LoginAttempt(username=mobile, client_ip=client_ip_var.get(), succeeded=True))
+    record_audit(
+        db, action=AuditAction.LOGIN_SUCCEEDED, entity_type="user", actor_user_id=user.id, entity_id=user.id
+    )
+    db.commit()
+    return pair
+
+
+def request_password_reset(db: Session, *, username: str) -> str:
+    """
+    Always returns the same acknowledgement. A reset token is created and SMS attempted only for
+    active PUBLIC accounts. Delivery depends on the configured notification provider/templates.
+    """
+    settings = get_settings()
+    try:
+        mobile, e164 = _canonical_mobile_username(username)
+    except ValidationFailed:
+        # Same response for malformed/unknown identifiers so this endpoint cannot enumerate accounts.
+        return FORGOT_PASSWORD_MESSAGE
+
+    user = db.scalar(select(User).where(User.username == mobile, User.is_active.is_(True)))
+    if user is not None and Role(user.role) is Role.PUBLIC:
+        # Invalidate outstanding unused tokens for this user.
+        db.execute(
+            update(PasswordResetToken)
+            .where(
+                PasswordResetToken.user_id == user.id,
+                PasswordResetToken.consumed_at.is_(None),
+            )
+            .values(consumed_at=utcnow())
+        )
+        raw_token = secrets.token_urlsafe(32)
+        reset = PasswordResetToken(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            token_hash=hash_token(raw_token),
+            expires_at=utcnow() + timedelta(minutes=settings.password_reset_token_ttl_minutes),
+            client_ip=client_ip_var.get(),
+        )
+        db.add(reset)
+        record_audit(
+            db,
+            action=AuditAction.PASSWORD_RESET_REQUESTED,
+            entity_type="user",
+            entity_id=user.id,
+            actor_user_id=None,
+            after={"recipient": mask(user.phone_number or e164)},
+        )
+        db.commit()
+
+        phone = user.phone_number or e164
+        body = render(
+            NotificationTemplate.PASSWORD_RESET,
+            "en",
+            otp=raw_token,
+            case_number="",
+            station="",
+        )
+        provider = get_provider()
+        if provider.enabled:
+            try:
+                provider.send(
+                    channel=NotificationChannel.SMS,
+                    to=phone if phone.startswith("+") else f"+{phone}",
+                    body=body,
+                    idempotency_key=str(reset.id),
+                    template=NotificationTemplate.PASSWORD_RESET,
+                    locale="en",
+                    extras={"otp": raw_token},
+                )
+            except ProviderError:
+                # Token remains valid; delivery failure is not an enumeration signal.
+                pass
+        del raw_token
+    else:
+        record_audit(
+            db,
+            action=AuditAction.PASSWORD_RESET_REQUESTED,
+            entity_type="user",
+            actor_user_id=None,
+            after={},
+        )
+        db.commit()
+
+    return FORGOT_PASSWORD_MESSAGE
+
+
+def reset_password(db: Session, *, token: str, new_password: str) -> None:
+    presented = hash_token(token.strip())
+    reset = db.scalar(
+        select(PasswordResetToken)
+        .where(
+            PasswordResetToken.token_hash == presented,
+            PasswordResetToken.consumed_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if reset is None or reset.expires_at <= utcnow():
+        raise Unauthenticated(INVALID_RESET_TOKEN, code="invalid_reset_token")
+
+    user = db.get(User, reset.user_id, with_for_update=True)
+    if user is None or not user.is_active or Role(user.role) is not Role.PUBLIC:
+        raise Unauthenticated(INVALID_RESET_TOKEN, code="invalid_reset_token")
+
+    validate_new_password(new_password, username=user.username)
+    user.password_hash = hash_password(new_password)
+    reset.consumed_at = utcnow()
+    # Consume any other outstanding tokens for this user.
+    db.execute(
+        update(PasswordResetToken)
+        .where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.consumed_at.is_(None),
+            PasswordResetToken.id != reset.id,
+        )
+        .values(consumed_at=utcnow())
+    )
+    revoke_all_sessions(db, user, "password_reset")
+    record_audit(
+        db,
+        action=AuditAction.PASSWORD_RESET_COMPLETED,
+        entity_type="user",
+        entity_id=user.id,
+        actor_user_id=user.id,
+        after={"source": "self_service"},
+    )
     db.commit()

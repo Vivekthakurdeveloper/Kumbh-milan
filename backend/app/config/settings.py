@@ -1,10 +1,14 @@
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlparse
+from uuid import UUID
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PLACEHOLDER_MARKERS = ("change-me", "changeme", "placeholder", "example")
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_INTERNAL_HOST_MARKERS = ("objectstore", ".internal", ".local", "host.docker.internal")
 
 
 class Settings(BaseSettings):
@@ -35,6 +39,10 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = 15
 
     contact_encryption_key: str = ""
+    public_security_secret: str = Field(
+        "",
+        description="HMAC/JWT secret for citizen OTP and case-scoped tokens; falls back to JWT_SECRET in local/test only",
+    )
 
     case_number_prefix: str = "KSLF"
     idempotency_ttl_hours: int = 24
@@ -44,6 +52,19 @@ class Settings(BaseSettings):
         ge=0,
         description="Pull omits changes newer than this lag so a late-committing transaction is never skipped",
     )
+
+    public_intake_user_id: UUID | None = Field(
+        None, description="Active HELP_DESK_OPERATOR used as reported_by for verified public submissions"
+    )
+    public_intake_station_id: UUID | None = Field(
+        None, description="Station that receives public submissions and unlinked sightings"
+    )
+    otp_ttl_seconds: int = Field(300, ge=60, le=1800)
+    otp_max_attempts: int = Field(5, ge=1, le=10)
+    otp_resend_seconds: int = Field(60, ge=15, le=600)
+    otp_length: int = Field(6, ge=4, le=8)
+    public_status_token_ttl_minutes: int = Field(15, ge=1, le=60)
+    public_verified_mobile_token_ttl_minutes: int = Field(30, ge=1, le=120)
 
     s3_endpoint_url: str | None = None
     s3_public_endpoint_url: str | None = None
@@ -85,14 +106,40 @@ class Settings(BaseSettings):
         None, description="Owner connection for executing anonymisation runs (retention task only, never the API)"
     )
 
-    notification_provider: Literal["disabled", "console", "mock"] = Field(
+    notification_provider: Literal["disabled", "console", "mock", "msg91"] = Field(
         "disabled",
-        description="console or mock are local only. No real SMS/WhatsApp provider is integrated.",
+        description="SMS/WhatsApp provider. console/mock are local/test only; msg91 requires credentials and DLT templates.",
     )
     notification_max_attempts: int = 5
     notification_retry_base_seconds: int = 60
     notification_stale_after_seconds: int = 300
     notification_default_country_code: str = "+91"
+    msg91_auth_key: str | None = None
+    msg91_sender_id: str | None = None
+    msg91_base_url: str = "https://control.msg91.com/api/v5"
+    msg91_template_ids: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of NotificationTemplate value -> MSG91 DLT template id",
+    )
+    msg91_timeout_seconds: float = 10.0
+
+    smtp_enabled: bool = False
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_use_tls: bool = True
+    smtp_from_email: str | None = None
+    smtp_from_name: str = "Kumbh Setu"
+    smtp_timeout_seconds: float = 15.0
+
+    fcm_enabled: bool = False
+    fcm_credentials_json: str | None = Field(
+        None, description="Firebase service-account JSON string; never log this value"
+    )
+    fcm_credentials_file: str | None = Field(
+        None, description="Optional path to a Firebase service-account JSON file"
+    )
 
     geo_operating_area: list[float] | None = Field(
         default_factory=lambda: [29.70, 77.90, 30.25, 78.45],
@@ -130,9 +177,16 @@ class Settings(BaseSettings):
     rate_limit_login_per_minute: int = 30
     rate_limit_refresh_per_minute: int = 60
     rate_limit_password_per_hour: int = 10
+    rate_limit_register_per_minute: int = 10
+    rate_limit_forgot_password_per_hour: int = 10
+    rate_limit_reset_password_per_hour: int = 20
     rate_limit_upload_per_minute: int = 30
     rate_limit_case_create_per_minute: int = 60
     rate_limit_search_per_minute: int = 180
+    rate_limit_public_otp_per_minute: int = 10
+    rate_limit_public_submit_per_minute: int = 20
+    rate_limit_public_status_per_minute: int = 30
+    password_reset_token_ttl_minutes: int = Field(30, ge=5, le=120)
     workers_required: bool = Field(
         False,
         description="When true, readiness fails unless scan, notification, cleanup, and retention workers have fresh heartbeats.",
@@ -150,8 +204,14 @@ class Settings(BaseSettings):
         if self.scan_mode == "clamav" and not self.clamav_host:
             raise ValueError("SCAN_MODE=clamav requires CLAMAV_HOST")
         if self.app_env in ("staging", "production"):
-            if self.notification_provider != "disabled":
-                raise ValueError("NOTIFICATION_PROVIDER must be disabled outside local and test until a provider is approved")
+            if self.notification_provider in ("console", "mock"):
+                raise ValueError("NOTIFICATION_PROVIDER=console/mock is local/test only")
+            if self.notification_provider == "msg91" and not self.msg91_auth_key:
+                raise ValueError("NOTIFICATION_PROVIDER=msg91 requires MSG91_AUTH_KEY")
+            if self.smtp_enabled and (not self.smtp_host or not self.smtp_from_email):
+                raise ValueError("SMTP_ENABLED requires SMTP_HOST and SMTP_FROM_EMAIL")
+            if self.fcm_enabled and not (self.fcm_credentials_json or self.fcm_credentials_file):
+                raise ValueError("FCM_ENABLED requires FCM_CREDENTIALS_JSON or FCM_CREDENTIALS_FILE")
             if not self.workers_required:
                 raise ValueError("WORKERS_REQUIRED must be true so readiness checks supervised workers")
             if self.scan_mode != "clamav":
@@ -160,6 +220,10 @@ class Settings(BaseSettings):
                 raise ValueError("JWT_SECRET must be a strong, non-placeholder secret of at least 32 characters")
             if not self.contact_encryption_key:
                 raise ValueError("CONTACT_ENCRYPTION_KEY is required outside local and test environments")
+            if not self.public_security_secret or len(self.public_security_secret) < 32:
+                raise ValueError("PUBLIC_SECURITY_SECRET (32+ characters) is required outside local and test")
+            if self.public_intake_user_id is None or self.public_intake_station_id is None:
+                raise ValueError("PUBLIC_INTAKE_USER_ID and PUBLIC_INTAKE_STATION_ID are required outside local/test")
             if self.face_matching_enabled and not self.face_embedding_encryption_key:
                 raise ValueError(
                     "FACE_EMBEDDING_ENCRYPTION_KEY is required outside local and test when face matching is enabled"
@@ -172,7 +236,35 @@ class Settings(BaseSettings):
                 raise ValueError("METRICS_TOKEN (24+ characters) is required to protect /metrics")
             if "*" in self.cors_origins:
                 raise ValueError("CORS_ORIGINS must list explicit origins outside local development")
+            self._require_browser_reachable_s3_public_endpoint()
         return self
+
+    def _require_browser_reachable_s3_public_endpoint(self) -> None:
+        """
+        Presigned photo URLs embed S3_PUBLIC_ENDPOINT_URL (or fall back to S3_ENDPOINT_URL).
+        Outside local/test the signed host must be an explicit HTTP(S) URL that browsers can reach —
+        never a loopback or docker-internal hostname.
+        """
+        public = (self.s3_public_endpoint_url or "").strip()
+        if not public:
+            # Empty public endpoint is only valid when using real AWS (no custom endpoint_url).
+            if self.s3_endpoint_url:
+                raise ValueError(
+                    "S3_PUBLIC_ENDPOINT_URL is required when S3_ENDPOINT_URL is set so browsers "
+                    "never receive internal/localhost object-store addresses"
+                )
+            return
+        parsed = urlparse(public)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError("S3_PUBLIC_ENDPOINT_URL must be an absolute http(s) URL")
+        host = parsed.hostname.lower()
+        if host in _LOOPBACK_HOSTS or any(marker in host for marker in _INTERNAL_HOST_MARKERS):
+            raise ValueError(
+                "S3_PUBLIC_ENDPOINT_URL must be a browser-reachable hostname "
+                "(not localhost, loopback, or docker-internal names)"
+            )
+        if self.app_env == "production" and parsed.scheme != "https":
+            raise ValueError("S3_PUBLIC_ENDPOINT_URL must use https in production")
 
 
 @lru_cache

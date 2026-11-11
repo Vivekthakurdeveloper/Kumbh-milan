@@ -17,12 +17,23 @@ SENSITIVE_KEYS = frozenset(
         "token",
         "access_token",
         "refresh_token",
+        "verified_mobile_token",
         "contact_details",
         "contact_ciphertext",
         "storage_key",
         "authorization",
         "embedding",
         "embedding_ciphertext",
+        "otp",
+        "code",
+        "mobile_number",
+        "recipient_phone",
+        "email",
+        "push_token",
+        "token_ciphertext",
+        "msg91_auth_key",
+        "smtp_password",
+        "fcm_credentials_json",
     }
 )
 
@@ -34,7 +45,10 @@ class AuditAction(StrEnum):
     TOKEN_REUSE_DETECTED = "TOKEN_REUSE_DETECTED"
     PASSWORD_CHANGED = "PASSWORD_CHANGED"
     PASSWORD_RESET = "PASSWORD_RESET"
+    PASSWORD_RESET_REQUESTED = "PASSWORD_RESET_REQUESTED"
+    PASSWORD_RESET_COMPLETED = "PASSWORD_RESET_COMPLETED"
     USER_CREATED = "USER_CREATED"
+    PUBLIC_USER_REGISTERED = "PUBLIC_USER_REGISTERED"
     USER_UPDATED = "USER_UPDATED"
     STATION_CREATED = "STATION_CREATED"
     STATION_UPDATED = "STATION_UPDATED"
@@ -83,6 +97,15 @@ class AuditAction(StrEnum):
     SYNC_PUSH = "SYNC_PUSH"
     SYNC_PULL = "SYNC_PULL"
     SYNC_CONFLICT = "SYNC_CONFLICT"
+    PUBLIC_OTP_REQUESTED = "PUBLIC_OTP_REQUESTED"
+    PUBLIC_OTP_VERIFIED = "PUBLIC_OTP_VERIFIED"
+    PUBLIC_OTP_FAILED = "PUBLIC_OTP_FAILED"
+    PUBLIC_CASE_SUBMITTED = "PUBLIC_CASE_SUBMITTED"
+    PUBLIC_CASE_REVIEWED = "PUBLIC_CASE_REVIEWED"
+    PUBLIC_SIGHTING_REPORTED = "PUBLIC_SIGHTING_REPORTED"
+    PUBLIC_INFORMATION_UPDATED = "PUBLIC_INFORMATION_UPDATED"
+    PUSH_TOKEN_REGISTERED = "PUSH_TOKEN_REGISTERED"
+    PUSH_TOKEN_REMOVED = "PUSH_TOKEN_REMOVED"
 
 
 def redact(value: Any) -> Any:

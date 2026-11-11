@@ -6,8 +6,10 @@ from app.api.v1 import (
     auth,
     cases,
     dashboard,
+    devices,
     locations,
     matches,
+    public,
     reports,
     retention,
     staff_notifications,
@@ -19,6 +21,10 @@ api_router.include_router(auth.router)
 api_router.include_router(admin.stations)
 api_router.include_router(admin.users)
 api_router.include_router(locations.router)
+api_router.include_router(public.router)
+api_router.include_router(public.admin_router)
+api_router.include_router(public.sightings_router)
+api_router.include_router(devices.router)
 # Type-specific routes must be registered before /cases/{case_id}.
 for router in cases.type_routers:
     api_router.include_router(router)

@@ -8,13 +8,13 @@ How to verify the API contracts described in this folder, what has already been 
 
 | Check | Command | Result | Date |
 |---|---|---|---|
-| OpenAPI generated from source | `APP_ENV=local DOCS_ENABLED=true .venv/bin/python -c "…json.dump(app.openapi(), …)"` (from `backend/`) | 63 paths, 83 operations → [openapi.json](./openapi.json) | 2026-11-05 |
-| Documentation examples validated against backend Pydantic models | `backend/.venv/bin/python docs/api/tools/validate_examples.py` (from repo root) | **57 examples checked, 0 failed** | 2026-11-05 |
+| OpenAPI generated from source | `APP_ENV=local DOCS_ENABLED=true .venv/bin/python -c "…json.dump(app.openapi(), …)"` (from `backend/`) | 88 paths, 110 operations → [openapi.json](./openapi.json) | 2026-11-07 (Phase 4) |
+| Documentation examples validated against backend Pydantic models | `backend/.venv/bin/python docs/api/tools/validate_examples.py` (from repo root) | **62 examples checked, 0 failed** | 2026-11-07 |
 | Validator negative check (missing required field, naive datetime, future datetime, invented response field) | ad-hoc script calling the validator functions | All four rejected | 2026-10-29 |
 | Hand-written TypeScript interfaces in the integration guide compared with Pydantic model fields and enum values | ad-hoc script | No missing or extra fields; all enum value sets equal | 2026-10-29 |
 | Schema max lengths vs database column lengths | ad-hoc script over SQLAlchemy metadata | **No mismatch** (`language` fixed; was gap G-15) | 2026-11-05 |
 | Database-free unit tests | `APP_ENV=test JWT_SECRET=<any 32+ char test value> .venv/bin/python -m pytest --noconftest -q tests/test_matching_engine.py tests/test_ratelimit.py` | **17 passed, 2 skipped** (Redis not reachable) | 2026-10-29 |
-| Full pytest suite (Phase 1 portal gaps) | `backend/.venv/bin/python -m pytest -q --tb=line` | **233 passed, 3 skipped** | 2026-11-05 |
+| Full pytest suite (Phase 4 public portal) | `backend/.venv/bin/python -m pytest -q --tb=line` | **278 passed, 1 skipped** | 2026-11-07 |
 
 ## 2. Existing test evidence
 

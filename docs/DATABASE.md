@@ -11,14 +11,28 @@ PostgreSQL 16 and PostGIS. Migrations are linear.
 | 0005 | Legal holds and retention runs |
 | 0006 | Notification outbox |
 | 0007 | Worker heartbeats, found-person safeguarding flag, found-item handover fields, user TOTP columns |
+| 0008 | Face embeddings and FACE match workflow columns |
+| 0009 | Mobile sync cursors, device/client record ids, `sync_devices` |
+| 0010 | Public portal: OTP challenges, sightings, push tokens, public information; case `source` / `public_review_status`; contact mobile/email verification metadata; notification EMAIL/PUSH + lifecycle templates |
 
 `0007` only adds nullable columns and one table, except `users.totp_enabled`, which is `false` for existing rows. It does not rewrite case text. Downgrade would drop those columns. Do not downgrade a database that has stored handover text or TOTP secrets; restore a backup instead.
+
+`0010` is additive. Existing staff cases keep `source=STAFF` and null `public_review_status`. Do not downgrade once public OTP, sighting, or citizen contact rows exist; restore a backup instead.
 
 The isolated copy of the operational volume was upgraded from `0001` to `0007`. `alembic check` on that copy exited 0. PostGIS `geography` columns produce a SQLAlchemy recognition warning and were not reported as a new upgrade operation.
 
 The original volume was not upgraded. Its server container was not started, so its live revision was not queried in place. The copy is the evidence that the volume, before upgrade, was at `0001`.
 
-Application tables include stations, users, cases and four detail tables, contacts, notes, assignments, status history, matches, attachments, face embeddings, staff notifications, idempotency keys, sessions, login attempts, audit events, locations, legal holds, retention runs, notifications, and worker heartbeats.
+Application tables include stations, users, cases and four detail tables, contacts, notes, assignments, status history, matches, attachments, face embeddings, staff notifications, idempotency keys, sessions, login attempts, audit events, locations, legal holds, retention runs, notifications, worker heartbeats, sync devices, OTP challenges, public sightings, push device tokens, and public information items.
+
+### Public portal (revision `0010`)
+
+- `otp_challenges`: purpose-bound hashed OTP rows (`REPORT_MISSING`, `REPORT_SIGHTING`, `CASE_STATUS`); mobile stored only as keyed hash + hint.
+- `public_sightings`: unverified citizen reports; optional link to a case; station-scoped staff review; encrypted reporter mobile.
+- `push_device_tokens`: encrypted FCM tokens for staff users or case-scoped citizen sessions; upsert by keyed token hash.
+- `public_information_items`: bilingual published help desks / emergency contacts / instructions / announcements (no case joins).
+- `cases.source` / `cases.public_review_status`: public intake stays `PENDING_VERIFICATION` until staff `case:review` approval; never presented as police-verified while pending or rejected.
+- `case_attachments.sighting_id`: exclusive parent with `case_id`; sighting-only photos are not face-matched.
 
 ### Face matching (revision `0008`)
 

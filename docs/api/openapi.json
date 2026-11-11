@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Kumbh Setu Lost & Found API",
-    "description": "\nCase management for missing persons, found persons, lost items, and found items at Haridwar Kumbh Mela 2027.\n\nAll `/api/v1` endpoints except login and refresh require `Authorization: Bearer <access token>`.\nVisibility is scoped by role and station; ids outside your scope return 404.\nErrors use `{\"error\": {\"code\", \"message\", \"request_id\", \"details\"}}`.\n",
+    "description": "\nCase management for missing persons, found persons, lost items, and found items at Haridwar Kumbh Mela 2027.\n\nStaff `/api/v1` endpoints require `Authorization: Bearer <access token>` except login/refresh.\nCitizen `/api/v1/public/*` endpoints are unauthenticated but OTP-gated where required.\nVisibility for staff APIs is scoped by role and station; ids outside your scope return 404.\nErrors use `{\"error\": {\"code\", \"message\", \"request_id\", \"details\"}}`.\n",
     "version": "1.0.0"
   },
   "paths": {
@@ -48,6 +48,68 @@
         }
       }
     },
+    "/api/v1/auth/register": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Register a PUBLIC citizen account",
+        "description": "Self-register with a mobile number as username. Role is always PUBLIC and cannot be chosen.\nReturns the same token structure as login.",
+        "operationId": "register_api_v1_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "tags": [
@@ -76,6 +138,113 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/forgot-password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Request a password reset token for a PUBLIC account",
+        "description": "Always returns the same message whether or not the account exists.\nWhen a PUBLIC account matches, a single-use reset token is stored as a hash and SMS delivery\nis attempted through the configured notification provider. Delivery is a deployment dependency.",
+        "operationId": "forgot_password_api_v1_auth_forgot_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/reset-password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Reset a PUBLIC account password with a one-time token",
+        "description": "Validate the reset token, set a new password, and revoke every existing session.",
+        "operationId": "reset_password_api_v1_auth_reset_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "401": {
             "description": "Missing, expired, or revoked credentials",
@@ -1988,6 +2157,1378 @@
         }
       }
     },
+    "/api/v1/public/otp/request": {
+      "post": {
+        "tags": [
+          "Public portal"
+        ],
+        "summary": "Request Otp",
+        "operationId": "request_otp_api_v1_public_otp_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpRequestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/otp/verify": {
+      "post": {
+        "tags": [
+          "Public portal"
+        ],
+        "summary": "Verify Otp",
+        "operationId": "verify_otp_api_v1_public_otp_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpVerify"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifiedMobileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/status/request-otp": {
+      "post": {
+        "tags": [
+          "Public portal"
+        ],
+        "summary": "Status Request Otp",
+        "operationId": "status_request_otp_api_v1_public_status_request_otp_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusOtpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpRequestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/status/verify-otp": {
+      "post": {
+        "tags": [
+          "Public portal"
+        ],
+        "summary": "Status Verify Otp",
+        "operationId": "status_verify_otp_api_v1_public_status_verify_otp_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusOtpVerify"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseStatusTokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/cases/{case_id}/status": {
+      "get": {
+        "tags": [
+          "Public portal"
+        ],
+        "summary": "Case Status",
+        "operationId": "case_status_api_v1_public_cases__case_id__status_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCaseStatusRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/missing-persons": {
+      "post": {
+        "tags": [
+          "Public portal"
+        ],
+        "summary": "Submit Missing Person",
+        "operationId": "submit_missing_person_api_v1_public_missing_persons_post",
+        "parameters": [
+          {
+            "name": "X-Verified-Mobile-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Verified-Mobile-Token"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_submit_missing_person_api_v1_public_missing_persons_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSubmissionAck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service temporarily unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/sightings": {
+      "post": {
+        "tags": [
+          "Public portal"
+        ],
+        "summary": "Submit Sighting",
+        "operationId": "submit_sighting_api_v1_public_sightings_post",
+        "parameters": [
+          {
+            "name": "X-Verified-Mobile-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Verified-Mobile-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_submit_sighting_api_v1_public_sightings_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSightingAck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service temporarily unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/information": {
+      "get": {
+        "tags": [
+          "Public portal"
+        ],
+        "summary": "Public Information",
+        "operationId": "public_information_api_v1_public_information_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicInformationList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/public-information": {
+      "get": {
+        "tags": [
+          "Public information admin"
+        ],
+        "summary": "Admin List Information",
+        "operationId": "admin_list_information_api_v1_admin_public_information_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PublicInformationRead"
+                  },
+                  "type": "array",
+                  "title": "Response Admin List Information Api V1 Admin Public Information Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Public information admin"
+        ],
+        "summary": "Admin Create Information",
+        "operationId": "admin_create_information_api_v1_admin_public_information_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicInformationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicInformationRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/public-information/{item_id}": {
+      "patch": {
+        "tags": [
+          "Public information admin"
+        ],
+        "summary": "Admin Update Information",
+        "operationId": "admin_update_information_api_v1_admin_public_information__item_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicInformationUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicInformationRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/public-information/{item_id}/publish": {
+      "post": {
+        "tags": [
+          "Public information admin"
+        ],
+        "summary": "Admin Publish Information",
+        "operationId": "admin_publish_information_api_v1_admin_public_information__item_id__publish_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicInformationRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/public-information/{item_id}/unpublish": {
+      "post": {
+        "tags": [
+          "Public information admin"
+        ],
+        "summary": "Admin Unpublish Information",
+        "operationId": "admin_unpublish_information_api_v1_admin_public_information__item_id__unpublish_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicInformationRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sightings": {
+      "get": {
+        "tags": [
+          "Sightings"
+        ],
+        "summary": "List Sightings",
+        "operationId": "list_sightings_api_v1_sightings_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 25,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_SightingRead_"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sightings/{sighting_id}": {
+      "get": {
+        "tags": [
+          "Sightings"
+        ],
+        "summary": "Get Sighting",
+        "operationId": "get_sighting_api_v1_sightings__sighting_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sighting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sighting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SightingRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sightings/{sighting_id}/photo": {
+      "get": {
+        "tags": [
+          "Sightings"
+        ],
+        "summary": "Get Sighting Photo",
+        "operationId": "get_sighting_photo_api_v1_sightings__sighting_id__photo_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sighting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sighting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentDownload"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/push-token": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Register Push Token",
+        "operationId": "register_push_token_api_v1_devices_push_token_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushTokenRegister"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Delete Push Token",
+        "operationId": "delete_push_token_api_v1_devices_push_token_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushTokenDelete"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/cases/missing-persons": {
       "post": {
         "tags": [
@@ -2594,6 +4135,24 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-generated key (8-128 chars) that makes retries safe",
+              "title": "Idempotency-Key"
+            },
+            "description": "Client-generated key (8-128 chars) that makes retries safe"
           }
         ],
         "requestBody": {
@@ -3538,6 +5097,24 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-generated key (8-128 chars) that makes retries safe",
+              "title": "Idempotency-Key"
+            },
+            "description": "Client-generated key (8-128 chars) that makes retries safe"
           }
         ],
         "requestBody": {
@@ -4482,6 +6059,24 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-generated key (8-128 chars) that makes retries safe",
+              "title": "Idempotency-Key"
+            },
+            "description": "Client-generated key (8-128 chars) that makes retries safe"
           }
         ],
         "requestBody": {
@@ -5426,6 +7021,24 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-generated key (8-128 chars) that makes retries safe",
+              "title": "Idempotency-Key"
+            },
+            "description": "Client-generated key (8-128 chars) that makes retries safe"
           }
         ],
         "requestBody": {
@@ -6843,6 +8456,128 @@
         }
       }
     },
+    "/api/v1/cases/{case_id}/public-review": {
+      "post": {
+        "tags": [
+          "Case operations"
+        ],
+        "summary": "Accept or reject a public citizen submission awaiting staff verification",
+        "operationId": "public_review_api_v1_cases__case_id__public_review_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MissingPersonCaseRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/FoundPersonCaseRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LostItemCaseRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/FoundItemCaseRead"
+                    }
+                  ],
+                  "title": "Response Public Review Api V1 Cases  Case Id  Public Review Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/cases/{case_id}/notes": {
       "get": {
         "tags": [
@@ -7187,7 +8922,7 @@
           "Case operations"
         ],
         "summary": "Upload a photo (JPEG/PNG/WEBP) or voice recording (WAV/MP3/M4A/OGG/WEBM)",
-        "description": "Files are quarantined and scanned before they can be downloaded. 201: scanned (CLEAN, or SKIPPED_DEV in\ndevelopment). 202: the scanner was unavailable; the file stays QUARANTINED and is retried automatically.\n422 malware_detected: the file was infected and has been deleted.",
+        "description": "Files are quarantined and scanned before they can be downloaded. 201: scanned (CLEAN, or SKIPPED_DEV in\ndevelopment). 202: the scanner was unavailable; the file stays QUARANTINED and is retried automatically.\n422 malware_detected: the file was infected and has been deleted.\nRetries are safe with Idempotency-Key or a stable client_record_id (+ device_id).",
         "operationId": "upload_attachment_api_v1_cases__case_id__attachments_post",
         "security": [
           {
@@ -7204,6 +8939,24 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-generated key (8-128 chars) that makes retries safe",
+              "title": "Idempotency-Key"
+            },
+            "description": "Client-generated key (8-128 chars) that makes retries safe"
           }
         ],
         "requestBody": {
@@ -9021,6 +10774,372 @@
         }
       }
     },
+    "/api/v1/sync/push": {
+      "post": {
+        "tags": [
+          "Mobile sync"
+        ],
+        "summary": "Push offline-created or offline-updated records",
+        "description": "Process up to SYNC_MAX_BATCH records independently. Each record returns SYNCED, DUPLICATE,\nCONFLICT, or FAILED. HTTP 200 is returned even when some records fail so the client can\nreconcile per record. Station scope and RBAC match the normal case APIs.",
+        "operationId": "push_api_v1_sync_push_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional batch key; per-record client_record_id is the durable guard",
+              "title": "Idempotency-Key"
+            },
+            "description": "Optional batch key; per-record client_record_id is the durable guard"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPushRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncPushResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/pull": {
+      "get": {
+        "tags": [
+          "Mobile sync"
+        ],
+        "summary": "Download cases updated after a sync cursor",
+        "description": "Keyset pagination on (sync_changed_at, id). Results are limited to cases the caller may see.\nA changed server_updated_at means notes or attachments may have changed; fetch those with the\nexisting case endpoints. Recent writes may be withheld for SYNC_PULL_LAG_SECONDS.",
+        "operationId": "pull_api_v1_sync_pull_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncPullResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/status": {
+      "get": {
+        "tags": [
+          "Mobile sync"
+        ],
+        "summary": "Report last sync times and the current server cursor",
+        "description": "pending_count and failed_count are stored as reported by the client; the server never invents them.",
+        "operationId": "status_api_v1_sync_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "pending_count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pending Count"
+            }
+          },
+          {
+            "name": "failed_count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Failed Count"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/audit-events": {
       "get": {
         "tags": [
@@ -10177,7 +12296,53 @@
           "Dashboard"
         ],
         "summary": "Counts for the console home screen",
+        "description": "Without `from`/`to`, behaviour is unchanged: active/status counts are point-in-time and\n`registered_today` means since Asia/Kolkata midnight.\n\nWith both parameters, case-created bounds filter the dashboard metrics (end date inclusive).",
         "operationId": "summary_api_v1_dashboard_summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive Asia/Kolkata calendar start date (YYYY-MM-DD)",
+              "title": "From"
+            },
+            "description": "Inclusive Asia/Kolkata calendar start date (YYYY-MM-DD)"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive Asia/Kolkata calendar end date (YYYY-MM-DD)",
+              "title": "To"
+            },
+            "description": "Inclusive Asia/Kolkata calendar end date (YYYY-MM-DD)"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -10229,12 +12394,7 @@
               }
             }
           }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
+        }
       }
     },
     "/api/v1/reports/cases.csv": {
@@ -10717,6 +12877,57 @@
         ],
         "title": "AuditEventRead"
       },
+      "Body_submit_missing_person_api_v1_public_missing_persons_post": {
+        "properties": {
+          "report": {
+            "type": "string",
+            "title": "Report",
+            "description": "JSON body matching PublicMissingPersonCreate"
+          },
+          "photo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "report"
+        ],
+        "title": "Body_submit_missing_person_api_v1_public_missing_persons_post"
+      },
+      "Body_submit_sighting_api_v1_public_sightings_post": {
+        "properties": {
+          "report": {
+            "type": "string",
+            "title": "Report"
+          },
+          "photo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "report"
+        ],
+        "title": "Body_submit_sighting_api_v1_public_sightings_post"
+      },
       "Body_upload_attachment_api_v1_cases__case_id__attachments_post": {
         "properties": {
           "media_type": {
@@ -10726,6 +12937,51 @@
             "type": "string",
             "format": "binary",
             "title": "File"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At"
           }
         },
         "type": "object",
@@ -10864,6 +13120,14 @@
         ],
         "title": "CasePosition"
       },
+      "CaseSource": {
+        "type": "string",
+        "enum": [
+          "STAFF",
+          "PUBLIC"
+        ],
+        "title": "CaseSource"
+      },
       "CaseStatus": {
         "type": "string",
         "enum": [
@@ -10876,6 +13140,42 @@
           "REOPENED"
         ],
         "title": "CaseStatus"
+      },
+      "CaseStatusTokenResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "const": "Bearer",
+            "title": "Token Type",
+            "default": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "scope": {
+            "type": "string",
+            "const": "status:read",
+            "title": "Scope",
+            "default": "status:read"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "access_token",
+          "expires_in",
+          "case_id"
+        ],
+        "title": "CaseStatusTokenResponse"
       },
       "CaseSummary": {
         "properties": {
@@ -10908,6 +13208,11 @@
             "type": "string",
             "format": "uuid",
             "title": "Station Id"
+          },
+          "reported_by_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reported By User Id"
           },
           "assigned_to_user_id": {
             "anyOf": [
@@ -11026,6 +13331,7 @@
           "status",
           "urgency_level",
           "station_id",
+          "reported_by_user_id",
           "assigned_to_user_id",
           "title",
           "location",
@@ -11333,6 +13639,24 @@
         ],
         "title": "FaceStatus"
       },
+      "ForgotPasswordRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 15,
+            "minLength": 10,
+            "pattern": "^[0-9]+$",
+            "title": "Username",
+            "description": "Registered mobile number"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "username"
+        ],
+        "title": "ForgotPasswordRequest"
+      },
       "FoundItemCaseRead": {
         "properties": {
           "id": {
@@ -11349,6 +13673,20 @@
           },
           "status": {
             "$ref": "#/components/schemas/CaseStatus"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CaseSource",
+            "default": "STAFF"
+          },
+          "public_review_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicReviewStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "urgency_level": {
             "anyOf": [
@@ -11447,6 +13785,23 @@
             ],
             "title": "Coordinate Accuracy M"
           },
+          "in_scope": {
+            "type": "boolean",
+            "title": "In Scope",
+            "description": "True when the case belongs to the caller's operational station scope (or is owned by a PUBLIC reporter)"
+          },
+          "verification_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Evidence",
+            "description": "Latest handover/reunification verification comment from status history, when the caller may see it"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -11511,6 +13866,7 @@
           "assigned_to_user_id",
           "has_contact_details",
           "version",
+          "in_scope",
           "created_at",
           "updated_at",
           "closed_at",
@@ -11698,6 +14054,61 @@
             ],
             "title": "Contact Details",
             "description": "Owner or family contact details. Write-only: encrypted at rest and never returned by case endpoints. Police and admins read it through POST /cases/{id}/contact/reveal, which is audited."
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id",
+            "description": "Optional app-instance id for offline sync"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id",
+            "description": "Required with client_record_id; identifies the device that created the record offline"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id",
+            "description": "Stable client-generated id; retries with the same id return the original case"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At",
+            "description": "When the record was created on the device (UTC)"
           }
         },
         "additionalProperties": false,
@@ -12035,6 +14446,20 @@
           "status": {
             "$ref": "#/components/schemas/CaseStatus"
           },
+          "source": {
+            "$ref": "#/components/schemas/CaseSource",
+            "default": "STAFF"
+          },
+          "public_review_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicReviewStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "urgency_level": {
             "anyOf": [
               {
@@ -12132,6 +14557,23 @@
             ],
             "title": "Coordinate Accuracy M"
           },
+          "in_scope": {
+            "type": "boolean",
+            "title": "In Scope",
+            "description": "True when the case belongs to the caller's operational station scope (or is owned by a PUBLIC reporter)"
+          },
+          "verification_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Evidence",
+            "description": "Latest handover/reunification verification comment from status history, when the caller may see it"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -12196,6 +14638,7 @@
           "assigned_to_user_id",
           "has_contact_details",
           "version",
+          "in_scope",
           "created_at",
           "updated_at",
           "closed_at",
@@ -12476,6 +14919,61 @@
             ],
             "title": "Contact Details",
             "description": "Owner or family contact details. Write-only: encrypted at rest and never returned by case endpoints. Police and admins read it through POST /cases/{id}/contact/reveal, which is audited."
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id",
+            "description": "Optional app-instance id for offline sync"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id",
+            "description": "Required with client_record_id; identifies the device that created the record offline"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id",
+            "description": "Stable client-generated id; retries with the same id return the original case"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At",
+            "description": "When the record was created on the device (UTC)"
           }
         },
         "additionalProperties": false,
@@ -12947,6 +15445,19 @@
         ],
         "title": "Gender"
       },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
       "LegalHoldCreate": {
         "properties": {
           "reason": {
@@ -13408,6 +15919,20 @@
           "status": {
             "$ref": "#/components/schemas/CaseStatus"
           },
+          "source": {
+            "$ref": "#/components/schemas/CaseSource",
+            "default": "STAFF"
+          },
+          "public_review_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicReviewStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "urgency_level": {
             "anyOf": [
               {
@@ -13505,6 +16030,23 @@
             ],
             "title": "Coordinate Accuracy M"
           },
+          "in_scope": {
+            "type": "boolean",
+            "title": "In Scope",
+            "description": "True when the case belongs to the caller's operational station scope (or is owned by a PUBLIC reporter)"
+          },
+          "verification_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Evidence",
+            "description": "Latest handover/reunification verification comment from status history, when the caller may see it"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -13569,6 +16111,7 @@
           "assigned_to_user_id",
           "has_contact_details",
           "version",
+          "in_scope",
           "created_at",
           "updated_at",
           "closed_at",
@@ -13756,6 +16299,61 @@
             ],
             "title": "Contact Details",
             "description": "Owner or family contact details. Write-only: encrypted at rest and never returned by case endpoints. Police and admins read it through POST /cases/{id}/contact/reveal, which is audited."
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id",
+            "description": "Optional app-instance id for offline sync"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id",
+            "description": "Required with client_record_id; identifies the device that created the record offline"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id",
+            "description": "Stable client-generated id; retries with the same id return the original case"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At",
+            "description": "When the record was created on the device (UTC)"
           }
         },
         "additionalProperties": false,
@@ -15353,6 +17951,20 @@
         ],
         "title": "MediaType"
       },
+      "MessageResponse": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "MessageResponse"
+      },
       "MfaConfirmRequest": {
         "properties": {
           "code": {
@@ -15410,6 +18022,20 @@
           },
           "status": {
             "$ref": "#/components/schemas/CaseStatus"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CaseSource",
+            "default": "STAFF"
+          },
+          "public_review_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicReviewStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "urgency_level": {
             "anyOf": [
@@ -15508,6 +18134,23 @@
             ],
             "title": "Coordinate Accuracy M"
           },
+          "in_scope": {
+            "type": "boolean",
+            "title": "In Scope",
+            "description": "True when the case belongs to the caller's operational station scope (or is owned by a PUBLIC reporter)"
+          },
+          "verification_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Evidence",
+            "description": "Latest handover/reunification verification comment from status history, when the caller may see it"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -15572,6 +18215,7 @@
           "assigned_to_user_id",
           "has_contact_details",
           "version",
+          "in_scope",
           "created_at",
           "updated_at",
           "closed_at",
@@ -15844,6 +18488,61 @@
             ],
             "title": "Contact Details",
             "description": "Owner or family contact details. Write-only: encrypted at rest and never returned by case endpoints. Police and admins read it through POST /cases/{id}/contact/reveal, which is audited."
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id",
+            "description": "Optional app-instance id for offline sync"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id",
+            "description": "Required with client_record_id; identifies the device that created the record offline"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id",
+            "description": "Stable client-generated id; retries with the same id return the original case"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At",
+            "description": "When the record was created on the device (UTC)"
           }
         },
         "additionalProperties": false,
@@ -16321,6 +19020,11 @@
             "format": "uuid",
             "title": "Station Id"
           },
+          "reported_by_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reported By User Id"
+          },
           "assigned_to_user_id": {
             "anyOf": [
               {
@@ -16446,6 +19150,7 @@
           "status",
           "urgency_level",
           "station_id",
+          "reported_by_user_id",
           "assigned_to_user_id",
           "title",
           "location",
@@ -16488,6 +19193,57 @@
             ],
             "title": "Corrects Note Id",
             "description": "Required when note_type is CORRECTION"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Record Id"
+          },
+          "client_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Created At"
           }
         },
         "additionalProperties": false,
@@ -16569,7 +19325,9 @@
         "type": "string",
         "enum": [
           "SMS",
-          "WHATSAPP"
+          "WHATSAPP",
+          "EMAIL",
+          "PUSH"
         ],
         "title": "NotificationChannel"
       },
@@ -16755,7 +19513,15 @@
         "type": "string",
         "enum": [
           "CASE_REGISTERED",
-          "CASE_UPDATE_VISIT_DESK"
+          "CASE_UPDATE_VISIT_DESK",
+          "CASE_SUBMITTED",
+          "CASE_APPROVED",
+          "CASE_STATUS_UPDATED",
+          "POTENTIAL_MATCH_VERIFIED",
+          "CASE_REUNITED",
+          "CASE_CLOSED",
+          "OTP_CODE",
+          "PASSWORD_RESET"
         ],
         "title": "NotificationTemplate"
       },
@@ -16802,6 +19568,97 @@
           "station_id"
         ],
         "title": "OfficerSummary"
+      },
+      "OtpPurpose": {
+        "type": "string",
+        "enum": [
+          "REPORT_MISSING",
+          "REPORT_SIGHTING",
+          "CASE_STATUS"
+        ],
+        "title": "OtpPurpose"
+      },
+      "OtpRequest": {
+        "properties": {
+          "mobile_number": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 8,
+            "title": "Mobile Number"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/OtpPurpose"
+          },
+          "locale": {
+            "type": "string",
+            "enum": [
+              "en",
+              "hi"
+            ],
+            "title": "Locale",
+            "default": "hi"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mobile_number",
+          "purpose"
+        ],
+        "title": "OtpRequest"
+      },
+      "OtpRequestResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "OTP_SENT",
+            "title": "Status",
+            "default": "OTP_SENT"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "expires_in_seconds": {
+            "type": "integer",
+            "title": "Expires In Seconds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message",
+          "expires_in_seconds"
+        ],
+        "title": "OtpRequestResponse"
+      },
+      "OtpVerify": {
+        "properties": {
+          "mobile_number": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 8,
+            "title": "Mobile Number"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/OtpPurpose"
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 8,
+            "minLength": 4,
+            "pattern": "^\\d+$",
+            "title": "Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mobile_number",
+          "purpose",
+          "code"
+        ],
+        "title": "OtpVerify"
       },
       "Page_AttachmentRead_": {
         "properties": {
@@ -17091,6 +19948,38 @@
         ],
         "title": "Page[NoteRead]"
       },
+      "Page_SightingRead_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SightingRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Total rows matching the filters"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[SightingRead]"
+      },
       "Page_StaffNotificationRead_": {
         "properties": {
           "items": {
@@ -17171,6 +20060,509 @@
         ],
         "title": "PasswordResetRequest"
       },
+      "PublicCaseStatusRead": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "status",
+          "updated_at",
+          "message"
+        ],
+        "title": "PublicCaseStatusRead"
+      },
+      "PublicInformationCreate": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/PublicInformationKind"
+          },
+          "title_en": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title En"
+          },
+          "title_hi": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title Hi"
+          },
+          "body_en": {
+            "type": "string",
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Body En"
+          },
+          "body_hi": {
+            "type": "string",
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Body Hi"
+          },
+          "contact_phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Phone"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Email"
+          },
+          "location_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Text"
+          },
+          "sort_order": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Sort Order",
+            "default": 0
+          },
+          "publish": {
+            "type": "boolean",
+            "title": "Publish",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "title_en",
+          "title_hi",
+          "body_en",
+          "body_hi"
+        ],
+        "title": "PublicInformationCreate"
+      },
+      "PublicInformationKind": {
+        "type": "string",
+        "enum": [
+          "HELP_DESK",
+          "EMERGENCY_CONTACT",
+          "INSTRUCTION",
+          "ANNOUNCEMENT"
+        ],
+        "title": "PublicInformationKind"
+      },
+      "PublicInformationList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PublicInformationRead"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "PublicInformationList"
+      },
+      "PublicInformationRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PublicInformationKind"
+          },
+          "title_en": {
+            "type": "string",
+            "title": "Title En"
+          },
+          "title_hi": {
+            "type": "string",
+            "title": "Title Hi"
+          },
+          "body_en": {
+            "type": "string",
+            "title": "Body En"
+          },
+          "body_hi": {
+            "type": "string",
+            "title": "Body Hi"
+          },
+          "contact_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Phone"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Email"
+          },
+          "location_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Text"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          },
+          "is_published": {
+            "type": "boolean",
+            "title": "Is Published"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "title_en",
+          "title_hi",
+          "body_en",
+          "body_hi",
+          "contact_phone",
+          "contact_email",
+          "location_text",
+          "sort_order",
+          "is_published",
+          "published_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PublicInformationRead"
+      },
+      "PublicInformationUpdate": {
+        "properties": {
+          "title_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title En"
+          },
+          "title_hi": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title Hi"
+          },
+          "body_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 5000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body En"
+          },
+          "body_hi": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 5000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Hi"
+          },
+          "contact_phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Phone"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Email"
+          },
+          "location_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Text"
+          },
+          "sort_order": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 10000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Order"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PublicInformationUpdate"
+      },
+      "PublicReviewRequest": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "VERIFIED",
+              "REJECTED"
+            ],
+            "title": "Decision"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 3,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision",
+          "reason"
+        ],
+        "title": "PublicReviewRequest"
+      },
+      "PublicReviewStatus": {
+        "type": "string",
+        "enum": [
+          "PENDING_VERIFICATION",
+          "VERIFIED",
+          "REJECTED"
+        ],
+        "title": "PublicReviewStatus"
+      },
+      "PublicSightingAck": {
+        "properties": {
+          "sighting_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sighting Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SightingStatus"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sighting_id",
+          "status",
+          "message"
+        ],
+        "title": "PublicSightingAck"
+      },
+      "PublicSubmissionAck": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PublicReviewStatus"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "status",
+          "message"
+        ],
+        "title": "PublicSubmissionAck"
+      },
+      "PushPlatform": {
+        "type": "string",
+        "enum": [
+          "ANDROID",
+          "IOS"
+        ],
+        "title": "PushPlatform"
+      },
+      "PushTokenDelete": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 20,
+            "title": "Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "PushTokenDelete"
+      },
+      "PushTokenRegister": {
+        "properties": {
+          "platform": {
+            "$ref": "#/components/schemas/PushPlatform"
+          },
+          "token": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 20,
+            "title": "Token"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id",
+            "description": "Case reference when registering from a citizen status session"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "platform",
+          "token"
+        ],
+        "title": "PushTokenRegister"
+      },
       "RefreshRequest": {
         "properties": {
           "refresh_token": {
@@ -17186,6 +20578,62 @@
           "refresh_token"
         ],
         "title": "RefreshRequest"
+      },
+      "RegisterRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 15,
+            "minLength": 10,
+            "pattern": "^[0-9]+$",
+            "title": "Username",
+            "description": "Citizen mobile number used as the login username"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Password"
+          },
+          "full_name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 2,
+            "title": "Full Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "username",
+          "password",
+          "full_name"
+        ],
+        "title": "RegisterRequest",
+        "description": "Citizen self-registration. Role is always PUBLIC and cannot be supplied by the client."
+      },
+      "ResetPasswordRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 20,
+            "title": "Token"
+          },
+          "new_password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "New Password"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token",
+          "new_password"
+        ],
+        "title": "ResetPasswordRequest"
       },
       "RetentionPlanReport": {
         "properties": {
@@ -17485,7 +20933,8 @@
         "enum": [
           "ADMIN",
           "POLICE_OFFICER",
-          "HELP_DESK_OPERATOR"
+          "HELP_DESK_OPERATOR",
+          "PUBLIC"
         ],
         "title": "Role"
       },
@@ -17501,6 +20950,102 @@
         ],
         "title": "ScanStatus",
         "description": "QUARANTINED -> SCANNING -> CLEAN | REJECTED, with SCAN_FAILED after retries are exhausted."
+      },
+      "SightingRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          },
+          "case_number_submitted": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Number Submitted"
+          },
+          "station_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Station Id"
+          },
+          "sighting_location": {
+            "type": "string",
+            "title": "Sighting Location"
+          },
+          "sighting_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Sighting At"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "reporter_mobile_hint": {
+            "type": "string",
+            "title": "Reporter Mobile Hint"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SightingStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "has_photo": {
+            "type": "boolean",
+            "title": "Has Photo",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "case_id",
+          "case_number_submitted",
+          "station_id",
+          "sighting_location",
+          "sighting_at",
+          "description",
+          "reporter_mobile_hint",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SightingRead"
+      },
+      "SightingStatus": {
+        "type": "string",
+        "enum": [
+          "UNVERIFIED",
+          "REVIEWED",
+          "DISMISSED"
+        ],
+        "title": "SightingStatus"
       },
       "StaffNotificationKind": {
         "type": "string",
@@ -17854,6 +21399,555 @@
           "created_at"
         ],
         "title": "StatusHistoryRead"
+      },
+      "StatusOtpRequest": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 3,
+            "title": "Case Id",
+            "description": "Human case reference number"
+          },
+          "mobile_number": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 8,
+            "title": "Mobile Number"
+          },
+          "locale": {
+            "type": "string",
+            "enum": [
+              "en",
+              "hi"
+            ],
+            "title": "Locale",
+            "default": "hi"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "mobile_number"
+        ],
+        "title": "StatusOtpRequest"
+      },
+      "StatusOtpVerify": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 3,
+            "title": "Case Id"
+          },
+          "mobile_number": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 8,
+            "title": "Mobile Number"
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 8,
+            "minLength": 4,
+            "pattern": "^\\d+$",
+            "title": "Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "mobile_number",
+          "code"
+        ],
+        "title": "StatusOtpVerify"
+      },
+      "SyncOperation": {
+        "type": "string",
+        "enum": [
+          "CREATE_CASE",
+          "UPDATE_CASE",
+          "ADD_NOTE"
+        ],
+        "title": "SyncOperation"
+      },
+      "SyncPullItem": {
+        "properties": {
+          "case": {
+            "type": "object",
+            "title": "Case"
+          },
+          "server_updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Server Updated At"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case",
+          "server_updated_at",
+          "version"
+        ],
+        "title": "SyncPullItem"
+      },
+      "SyncPullResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SyncPullItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Server Time"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more",
+          "server_time"
+        ],
+        "title": "SyncPullResponse"
+      },
+      "SyncPushRecord": {
+        "properties": {
+          "client_record_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Record Id"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/SyncOperation"
+          },
+          "client_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Client Created At"
+          },
+          "data": {
+            "type": "object",
+            "title": "Data"
+          },
+          "case_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaseType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Required for CREATE_CASE"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id",
+            "description": "Server case id for UPDATE_CASE and ADD_NOTE"
+          },
+          "case_client_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Client Record Id",
+            "description": "Offline case id when the server case id is not yet known"
+          },
+          "base_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Version",
+            "description": "Required for UPDATE_CASE; mismatch returns CONFLICT"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "client_record_id",
+          "operation",
+          "client_created_at"
+        ],
+        "title": "SyncPushRecord"
+      },
+      "SyncPushRequest": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Device Id"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "pending_count": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Count",
+            "description": "Client-reported backlog; stored as reported"
+          },
+          "failed_count": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Count",
+            "description": "Client-reported failures; stored as reported"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/SyncPushRecord"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Records"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device_id"
+        ],
+        "title": "SyncPushRequest"
+      },
+      "SyncPushResponse": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SyncRecordResult"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "synced": {
+            "type": "integer",
+            "title": "Synced"
+          },
+          "duplicates": {
+            "type": "integer",
+            "title": "Duplicates"
+          },
+          "conflicts": {
+            "type": "integer",
+            "title": "Conflicts"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Server Time"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device_id",
+          "results",
+          "synced",
+          "duplicates",
+          "conflicts",
+          "failed",
+          "server_time"
+        ],
+        "title": "SyncPushResponse"
+      },
+      "SyncRecordOutcome": {
+        "type": "string",
+        "enum": [
+          "SYNCED",
+          "DUPLICATE",
+          "CONFLICT",
+          "FAILED"
+        ],
+        "title": "SyncRecordOutcome"
+      },
+      "SyncRecordResult": {
+        "properties": {
+          "client_record_id": {
+            "type": "string",
+            "title": "Client Record Id"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/SyncOperation"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/SyncRecordOutcome"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          },
+          "case_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Number"
+          },
+          "note_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note Id"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "server_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Updated At"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "error_details": {
+            "title": "Error Details"
+          },
+          "case": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case",
+            "description": "Current server case on CONFLICT so the client can resolve without a separate fetch"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "client_record_id",
+          "operation",
+          "outcome"
+        ],
+        "title": "SyncRecordResult"
+      },
+      "SyncStatusResponse": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "last_successful_sync_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Successful Sync At",
+            "description": "Latest of last successful push and pull for this device"
+          },
+          "last_successful_push_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Successful Push At"
+          },
+          "last_successful_pull_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Successful Pull At"
+          },
+          "pending_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Count",
+            "description": "Last value reported by the client; null if never reported"
+          },
+          "failed_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Count",
+            "description": "Last value reported by the client; null if never reported"
+          },
+          "server_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Cursor",
+            "description": "Current sync cursor for the caller's permitted cases"
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Server Time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "server_time"
+        ],
+        "title": "SyncStatusResponse"
       },
       "TokenResponse": {
         "properties": {
@@ -18217,6 +22311,68 @@
         "additionalProperties": false,
         "type": "object",
         "title": "UserUpdate"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VerifiedMobileResponse": {
+        "properties": {
+          "verified_mobile_token": {
+            "type": "string",
+            "title": "Verified Mobile Token"
+          },
+          "token_type": {
+            "type": "string",
+            "const": "Bearer",
+            "title": "Token Type",
+            "default": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/OtpPurpose"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "verified_mobile_token",
+          "expires_in",
+          "purpose"
+        ],
+        "title": "VerifiedMobileResponse"
       }
     },
     "securitySchemes": {

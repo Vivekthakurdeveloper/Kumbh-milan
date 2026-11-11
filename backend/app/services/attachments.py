@@ -49,6 +49,10 @@ def final_key(case_id: uuid.UUID, attachment_id: uuid.UUID) -> str:
     return f"cases/{case_id}/{attachment_id.hex}"
 
 
+def sighting_final_key(sighting_id: uuid.UUID, attachment_id: uuid.UUID) -> str:
+    return f"sightings/{sighting_id}/{attachment_id.hex}"
+
+
 def is_downloadable(attachment: CaseAttachment) -> bool:
     if attachment.scan_status == ScanStatus.CLEAN:
         return True
@@ -89,7 +93,7 @@ def upload_attachment(
 
     from app.services.idempotency import run_idempotent_operation
 
-    require_permission(actor, Permission.ATTACHMENT_UPLOAD)
+    require_permission(actor, Permission.ATTACHMENT_UPLOAD, allow_public=True)
     case = load_case(db, actor, case_id)
     if case.status == CaseStatus.CLOSED:
         raise Conflict("Closed cases do not accept new attachments", code="case_closed")
@@ -246,7 +250,9 @@ def _claim(db: Session, attachment_id: uuid.UUID) -> bool:
     return claimed is not None
 
 
-def _case_of(db: Session, attachment: CaseAttachment) -> Case:
+def _case_of(db: Session, attachment: CaseAttachment) -> Case | None:
+    if attachment.case_id is None:
+        return None
     return db.get(Case, attachment.case_id)
 
 
@@ -291,9 +297,14 @@ def process_scan(
     return _fail(db, attachment, case, verdict.detail or "scanner error")
 
 
-def _promote(db: Session, storage: ObjectStorage, attachment: CaseAttachment, case: Case, status: ScanStatus) -> ScanStatus:
+def _promote(
+    db: Session, storage: ObjectStorage, attachment: CaseAttachment, case: Case | None, status: ScanStatus
+) -> ScanStatus:
     source = attachment.storage_key
-    dest = final_key(attachment.case_id, attachment.id)
+    if attachment.case_id is not None:
+        dest = final_key(attachment.case_id, attachment.id)
+    else:
+        dest = sighting_final_key(attachment.sighting_id, attachment.id)
     try:
         storage.copy(source, dest)
     except Exception as exc:  # noqa: BLE001
@@ -305,7 +316,7 @@ def _promote(db: Session, storage: ObjectStorage, attachment: CaseAttachment, ca
     attachment.last_scan_error = None
     record_audit(
         db, action=AuditAction.ATTACHMENT_SCAN_CLEAN, entity_type="case_attachment", entity_id=attachment.id,
-        actor_user_id=None, case=case, after={"scan_status": status},
+        actor_user_id=None, case=case, after={"scan_status": status, "sighting_id": attachment.sighting_id},
     )
     try:
         db.commit()
@@ -315,14 +326,15 @@ def _promote(db: Session, storage: ObjectStorage, attachment: CaseAttachment, ca
         raise
     storage.delete(source)
     SCAN_OUTCOMES.labels("clean" if status is ScanStatus.CLEAN else "skipped_dev").inc()
-    if attachment.media_type == MediaType.PHOTO:
+    # Sighting-only photos are never face-matched.
+    if attachment.media_type == MediaType.PHOTO and attachment.case_id is not None:
         from app.services.faces import run_after_photo
 
         run_after_photo(attachment.id)
     return status
 
 
-def _defer(db: Session, attachment: CaseAttachment, case: Case, error: str) -> ScanStatus:
+def _defer(db: Session, attachment: CaseAttachment, case: Case | None, error: str) -> ScanStatus:
     settings = get_settings()
     if attachment.scan_attempts >= settings.scan_max_attempts:
         return _fail(db, attachment, case, f"scanner unavailable after {attachment.scan_attempts} attempts ({error})")
@@ -336,7 +348,7 @@ def _defer(db: Session, attachment: CaseAttachment, case: Case, error: str) -> S
     return ScanStatus.QUARANTINED
 
 
-def _fail(db: Session, attachment: CaseAttachment, case: Case, detail: str) -> ScanStatus:
+def _fail(db: Session, attachment: CaseAttachment, case: Case | None, detail: str) -> ScanStatus:
     attachment.scan_status = ScanStatus.SCAN_FAILED
     attachment.next_scan_at = None
     attachment.last_scan_error = detail[:200]
@@ -376,7 +388,7 @@ def due_scans(db: Session, limit: int) -> list[uuid.UUID]:
 def list_attachments(
     db: Session, actor: User, case_id: uuid.UUID, *, limit: int, offset: int
 ) -> tuple[list[CaseAttachment], int]:
-    require_permission(actor, Permission.CASE_READ)
+    require_permission(actor, Permission.CASE_READ, allow_public=True)
     load_case(db, actor, case_id)
     conditions = [CaseAttachment.case_id == case_id, CaseAttachment.deleted_at.is_(None)]
     total = db.scalar(select(func.count(CaseAttachment.id)).where(*conditions)) or 0

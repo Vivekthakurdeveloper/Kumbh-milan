@@ -24,7 +24,7 @@ class RecordingProvider:
         self.failures = list(failures or [])
         self.sent: list[dict] = []
 
-    def send(self, *, channel, to, body, idempotency_key):
+    def send(self, *, channel, to, body, idempotency_key, subject=None, template=None, locale=None, extras=None):
         if self.failures:
             failure = self.failures.pop(0)
             if failure:
@@ -74,11 +74,21 @@ def test_queue_is_idempotent(client, actors):
 
 
 def test_templates_carry_no_personal_details():
-    for template in ("CASE_REGISTERED", "CASE_UPDATE_VISIT_DESK"):
+    for template in (
+        "CASE_REGISTERED",
+        "CASE_UPDATE_VISIT_DESK",
+        "CASE_SUBMITTED",
+        "CASE_APPROVED",
+        "CASE_STATUS_UPDATED",
+        "POTENTIAL_MATCH_VERIFIED",
+        "CASE_REUNITED",
+        "CASE_CLOSED",
+    ):
         for locale in ("en", "hi"):
             text = render(template, locale, case_number="KS-MP-2027-000123", station="Har Ki Pauri desk")
             assert "KS-MP-2027-000123" in text and "Har Ki Pauri desk" in text
             assert "{" not in text
+            assert "Raju" not in text
 
 
 def test_phone_normalisation():

@@ -24,12 +24,14 @@ from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
 from app.database.base import Base
 from app.models.enums import (
     AgeGroup,
+    CaseSource,
     CaseStatus,
     CaseType,
     CommunicationStatus,
     CoordinateSource,
     CustodyStatus,
     Gender,
+    PublicReviewStatus,
     UrgencyLevel,
     enum_type,
 )
@@ -73,7 +75,12 @@ class Case(TimestampMixin, Base):
         CheckConstraint("coordinate_accuracy_m IS NULL OR coordinate_accuracy_m BETWEEN 0 AND 100000", name="accuracy_range"),
         CheckConstraint("client_record_id IS NULL OR device_id IS NOT NULL", name="ck_cases_client_record_requires_device"),
         CheckConstraint("sync_status IS NULL OR sync_status = 'SYNCED'", name="ck_cases_sync_status"),
+        CheckConstraint(
+            "(source = 'PUBLIC') = (public_review_status IS NOT NULL)",
+            name="ck_cases_public_review_matches_source",
+        ),
         Index("ix_cases_sync_changed_at_id", "sync_changed_at", "id"),
+        Index("ix_cases_source_public_review", "source", "public_review_status"),
         Index(
             "uq_cases_reporter_device_client_record",
             "reported_by_user_id",
@@ -98,6 +105,15 @@ class Case(TimestampMixin, Base):
     )
     status: Mapped[CaseStatus] = mapped_column(
         enum_type(CaseStatus, "case_status"), nullable=False, server_default=CaseStatus.OPEN.value
+    )
+    source: Mapped[CaseSource] = mapped_column(
+        enum_type(CaseSource, "case_source"),
+        nullable=False,
+        default=CaseSource.STAFF,
+        server_default=CaseSource.STAFF.value,
+    )
+    public_review_status: Mapped[PublicReviewStatus | None] = mapped_column(
+        enum_type(PublicReviewStatus, "public_review_status")
     )
     urgency_level: Mapped[UrgencyLevel | None] = mapped_column(enum_type(UrgencyLevel, "urgency_level"))
     search_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")

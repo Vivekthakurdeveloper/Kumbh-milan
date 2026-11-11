@@ -7,6 +7,7 @@ class Role(StrEnum):
     ADMIN = "ADMIN"
     POLICE_OFFICER = "POLICE_OFFICER"
     HELP_DESK_OPERATOR = "HELP_DESK_OPERATOR"
+    PUBLIC = "PUBLIC"
 
 
 class StationKind(StrEnum):
@@ -29,6 +30,41 @@ class CaseStatus(StrEnum):
     RESOLVED = "RESOLVED"
     CLOSED = "CLOSED"
     REOPENED = "REOPENED"
+
+
+class CaseSource(StrEnum):
+    STAFF = "STAFF"
+    PUBLIC = "PUBLIC"
+
+
+class PublicReviewStatus(StrEnum):
+    PENDING_VERIFICATION = "PENDING_VERIFICATION"
+    VERIFIED = "VERIFIED"
+    REJECTED = "REJECTED"
+
+
+class OtpPurpose(StrEnum):
+    REPORT_MISSING = "REPORT_MISSING"
+    REPORT_SIGHTING = "REPORT_SIGHTING"
+    CASE_STATUS = "CASE_STATUS"
+
+
+class SightingStatus(StrEnum):
+    UNVERIFIED = "UNVERIFIED"
+    REVIEWED = "REVIEWED"
+    DISMISSED = "DISMISSED"
+
+
+class PushPlatform(StrEnum):
+    ANDROID = "ANDROID"
+    IOS = "IOS"
+
+
+class PublicInformationKind(StrEnum):
+    HELP_DESK = "HELP_DESK"
+    EMERGENCY_CONTACT = "EMERGENCY_CONTACT"
+    INSTRUCTION = "INSTRUCTION"
+    ANNOUNCEMENT = "ANNOUNCEMENT"
 
 
 class UrgencyLevel(StrEnum):
@@ -112,11 +148,21 @@ class RetentionRunStatus(StrEnum):
 class NotificationTemplate(StrEnum):
     CASE_REGISTERED = "CASE_REGISTERED"
     CASE_UPDATE_VISIT_DESK = "CASE_UPDATE_VISIT_DESK"
+    CASE_SUBMITTED = "CASE_SUBMITTED"
+    CASE_APPROVED = "CASE_APPROVED"
+    CASE_STATUS_UPDATED = "CASE_STATUS_UPDATED"
+    POTENTIAL_MATCH_VERIFIED = "POTENTIAL_MATCH_VERIFIED"
+    CASE_REUNITED = "CASE_REUNITED"
+    CASE_CLOSED = "CASE_CLOSED"
+    OTP_CODE = "OTP_CODE"
+    PASSWORD_RESET = "PASSWORD_RESET"
 
 
 class NotificationChannel(StrEnum):
     SMS = "SMS"
     WHATSAPP = "WHATSAPP"
+    EMAIL = "EMAIL"
+    PUSH = "PUSH"
 
 
 class NotificationStatus(StrEnum):

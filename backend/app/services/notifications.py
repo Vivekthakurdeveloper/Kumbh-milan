@@ -13,15 +13,25 @@ from app.common.crypto import decrypt_text, encrypt_text
 from app.common.errors import Conflict, ValidationFailed
 from app.common.time import utcnow
 from app.config import get_settings
-from app.models import Case, Notification, Station, User
-from app.models.enums import CaseStatus, NotificationStatus
-from app.notifications import LOCALES, NotificationProvider, ProviderError, mask, normalise_phone, render
+from app.models import Case, CaseContact, Notification, PushDeviceToken, Station, User
+from app.models.enums import CaseStatus, NotificationChannel, NotificationStatus, NotificationTemplate
+from app.notifications import (
+    LOCALES,
+    NotificationProvider,
+    ProviderError,
+    mask,
+    normalise_phone,
+    render,
+    render_subject,
+)
 from app.observability.metrics import NOTIFICATION_OUTCOMES
 from app.schemas.notifications import NotificationCreate
 from app.services.access import load_case
 
 logger = logging.getLogger("kumbh_setu.notifications")
 S = NotificationStatus
+
+AUTOMATED_CONSENT = "Automated notification to verified consenting recipient for case lifecycle update"
 
 
 def queue(db: Session, actor: User, case_id: uuid.UUID, req: NotificationCreate, idempotency_key: str | None
@@ -36,7 +46,6 @@ def queue(db: Session, actor: User, case_id: uuid.UUID, req: NotificationCreate,
     if phone is None:
         raise ValidationFailed("recipient_phone is not a valid phone number", code="invalid_phone")
 
-    # The key binds the client's retry key to this case and template, so a replay cannot target another case.
     raw_key = idempotency_key or uuid.uuid4().hex
     key = hashlib.sha256(f"{case.id}:{req.template}:{raw_key}".encode()).hexdigest()
     existing = db.scalar(select(Notification).where(Notification.idempotency_key == key))
@@ -47,7 +56,7 @@ def queue(db: Session, actor: User, case_id: uuid.UUID, req: NotificationCreate,
         id=uuid.uuid4(), case_id=case.id, template=req.template, channel=req.channel, locale=req.locale,
         recipient_ciphertext=encrypt_text(phone), recipient_hint=mask(phone), status=S.PENDING,
         next_attempt_at=func.now(), idempotency_key=key, consent_statement=req.consent_statement,
-        requested_by_user_id=actor.id,
+        requested_by_user_id=actor.id, subject=render_subject(req.template, req.locale, case_number=case.case_number),
     )
     db.add(notification)
     record_audit(
@@ -68,6 +77,114 @@ def queue(db: Session, actor: User, case_id: uuid.UUID, req: NotificationCreate,
     return notification, False
 
 
+def enqueue_event(
+    db: Session,
+    case: Case,
+    template: NotificationTemplate,
+    *,
+    channels: list[NotificationChannel] | None = None,
+    locale: str | None = None,
+    actor_user_id: uuid.UUID | None = None,
+    idempotency_suffix: str | None = None,
+) -> list[Notification]:
+    """
+    Queue lifecycle notifications in the caller's open transaction (no commit).
+    Skips when no verified consenting recipient exists.
+    """
+    contact = db.get(CaseContact, case.id)
+    if contact is None or not contact.notification_consent_statement or not contact.mobile_lookup_hash:
+        return []
+    if case.anonymized_at is not None:
+        return []
+    preferred = locale or contact.preferred_locale or "hi"
+    if preferred not in LOCALES:
+        preferred = "hi"
+    channels = channels or [NotificationChannel.SMS]
+    created: list[Notification] = []
+    for channel in channels:
+        suffix = idempotency_suffix or template.value
+        key = hashlib.sha256(f"{case.id}:{template}:{channel}:{suffix}".encode()).hexdigest()
+        existing = db.scalar(select(Notification).where(Notification.idempotency_key == key))
+        if existing is not None:
+            created.append(existing)
+            continue
+        if channel is NotificationChannel.EMAIL and not contact.email_ciphertext:
+            continue
+        if channel is NotificationChannel.PUSH:
+            tokens = list(
+                db.scalars(
+                    select(PushDeviceToken).where(
+                        PushDeviceToken.case_id == case.id, PushDeviceToken.is_active.is_(True)
+                    )
+                )
+            )
+            for token in tokens:
+                push_key = hashlib.sha256(f"{key}:{token.id}".encode()).hexdigest()
+                if db.scalar(select(Notification.id).where(Notification.idempotency_key == push_key)):
+                    continue
+                row = Notification(
+                    id=uuid.uuid4(),
+                    case_id=case.id,
+                    template=template,
+                    channel=channel,
+                    locale=preferred,
+                    recipient_ciphertext=token.token_ciphertext,
+                    recipient_hint="device",
+                    status=S.PENDING,
+                    next_attempt_at=func.now(),
+                    idempotency_key=push_key,
+                    consent_statement=contact.notification_consent_statement or AUTOMATED_CONSENT,
+                    requested_by_user_id=actor_user_id,
+                    subject=render_subject(template, preferred, case_number=case.case_number),
+                    device_token_id=token.id,
+                )
+                db.add(row)
+                created.append(row)
+            continue
+
+        if channel in (NotificationChannel.SMS, NotificationChannel.WHATSAPP):
+            if not contact.mobile_lookup_hash:
+                continue
+            recipient = decrypt_text(contact.contact_ciphertext)
+            if normalise_phone(recipient, get_settings().notification_default_country_code) is None:
+                continue
+            hint = contact.mobile_hint or mask(recipient)
+            ciphertext = contact.contact_ciphertext
+        else:
+            if not contact.email_ciphertext:
+                continue
+            hint = contact.email_hint
+            ciphertext = contact.email_ciphertext
+
+        row = Notification(
+            id=uuid.uuid4(),
+            case_id=case.id,
+            template=template,
+            channel=channel,
+            locale=preferred,
+            recipient_ciphertext=ciphertext,
+            recipient_hint=(hint or "••••")[:64],
+            status=S.PENDING,
+            next_attempt_at=func.now(),
+            idempotency_key=key,
+            consent_statement=contact.notification_consent_statement or AUTOMATED_CONSENT,
+            requested_by_user_id=actor_user_id,
+            subject=render_subject(template, preferred, case_number=case.case_number),
+        )
+        db.add(row)
+        record_audit(
+            db,
+            action=AuditAction.NOTIFICATION_QUEUED,
+            entity_type="notification",
+            entity_id=row.id,
+            actor_user_id=actor_user_id,
+            case=case,
+            after={"template": template, "channel": channel, "locale": preferred, "automated": True},
+        )
+        created.append(row)
+    return created
+
+
 def list_for_case(db: Session, actor: User, case_id: uuid.UUID) -> list[Notification]:
     require_permission(actor, Permission.CASE_READ)
     load_case(db, actor, case_id)
@@ -75,7 +192,6 @@ def list_for_case(db: Session, actor: User, case_id: uuid.UUID) -> list[Notifica
 
 
 def cancel_for_case(db: Session, case_id: uuid.UUID) -> int:
-    """Used by anonymisation: drops recipients and cancels anything not yet sent. Caller commits."""
     cancelled = db.execute(
         update(Notification)
         .where(Notification.case_id == case_id, Notification.status.in_((S.PENDING, S.SENDING)))
@@ -84,9 +200,6 @@ def cancel_for_case(db: Session, case_id: uuid.UUID) -> int:
     db.execute(update(Notification).where(Notification.case_id == case_id)
                .values(recipient_ciphertext=None, recipient_hint=None))
     return cancelled
-
-
-# --- Delivery worker -----------------------------------------------------------------------------
 
 
 def release_stale(db: Session) -> int:
@@ -130,12 +243,26 @@ def deliver_one(db: Session, provider: NotificationProvider, notification_id: uu
     case = db.get(Case, n.case_id)
     station = db.get(Station, case.station_id)
     body = render(n.template, n.locale, case_number=case.case_number, station=station.name)
+    subject = n.subject or render_subject(n.template, n.locale, case_number=case.case_number)
     try:
-        delivery = provider.send(channel=n.channel, to=decrypt_text(n.recipient_ciphertext), body=body,
-                                 idempotency_key=str(n.id))
+        delivery = provider.send(
+            channel=n.channel,
+            to=decrypt_text(n.recipient_ciphertext),
+            body=body,
+            idempotency_key=str(n.id),
+            subject=subject,
+            template=n.template,
+            locale=n.locale,
+        )
     except ProviderError as exc:
+        if n.channel is NotificationChannel.PUSH and exc.permanent and n.device_token_id:
+            token = db.get(PushDeviceToken, n.device_token_id)
+            if token is not None:
+                token.is_active = False
+                token.deactivated_at = utcnow()
+                token.deactivation_reason = "provider_invalid"
         return _failed_attempt(db, n, case, str(exc), permanent=exc.permanent)
-    except Exception as exc:  # noqa: BLE001 - unknown provider failures are retried
+    except Exception as exc:  # noqa: BLE001
         return _failed_attempt(db, n, case, type(exc).__name__, permanent=False)
 
     n.status, n.sent_at, n.provider_message_id = S.SENT, utcnow(), delivery.provider_message_id

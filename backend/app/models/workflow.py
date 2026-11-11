@@ -134,7 +134,12 @@ class CaseAttachment(CreatedAtMixin, Base):
             "client_record_id IS NULL OR device_id IS NOT NULL",
             name="ck_case_attachments_client_record_requires_device",
         ),
+        CheckConstraint(
+            "(case_id IS NOT NULL AND sighting_id IS NULL) OR (case_id IS NULL AND sighting_id IS NOT NULL)",
+            name="ck_case_attachments_exclusive_parent",
+        ),
         Index("ix_case_attachments_case_created", "case_id", "created_at"),
+        Index("ix_case_attachments_sighting_created", "sighting_id", "created_at"),
         Index(
             "ix_case_attachments_scan_queue", "next_scan_at",
             postgresql_where=text("scan_status IN ('QUARANTINED', 'SCANNING')"),
@@ -150,8 +155,13 @@ class CaseAttachment(CreatedAtMixin, Base):
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    case_id: Mapped[uuid.UUID] = _case_fk()
-    uploaded_by_user_id: Mapped[uuid.UUID] = _user_fk()
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), nullable=True
+    )
+    sighting_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("public_sightings.id", ondelete="RESTRICT"), nullable=True
+    )
+    uploaded_by_user_id: Mapped[uuid.UUID | None] = _user_fk(nullable=True)
     media_type: Mapped[MediaType] = mapped_column(enum_type(MediaType, "media_type"), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     original_filename: Mapped[str | None] = mapped_column(String(255))
@@ -302,9 +312,22 @@ class CaseContact(TimestampMixin, Base):
     """Owner/family contact details, encrypted at the application layer. Never included in list or search."""
 
     __tablename__ = "case_contacts"
+    __table_args__ = (
+        Index("ix_case_contacts_mobile_lookup_hash", "mobile_lookup_hash"),
+    )
 
     case_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), primary_key=True
     )
     contact_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_by_user_id: Mapped[uuid.UUID] = _user_fk()
+    updated_by_user_id: Mapped[uuid.UUID | None] = _user_fk(nullable=True)
+    reporter_name: Mapped[str | None] = mapped_column(String(200))
+    mobile_lookup_hash: Mapped[str | None] = mapped_column(String(64))
+    mobile_hint: Mapped[str | None] = mapped_column(String(16))
+    mobile_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    email_ciphertext: Mapped[str | None] = mapped_column(Text)
+    email_hint: Mapped[str | None] = mapped_column(String(64))
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    preferred_locale: Mapped[str | None] = mapped_column(String(8))
+    notification_consent_statement: Mapped[str | None] = mapped_column(Text)
+    notification_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

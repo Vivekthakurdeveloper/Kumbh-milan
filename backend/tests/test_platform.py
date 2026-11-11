@@ -17,10 +17,22 @@ def test_openapi_documents_every_operation(client):
         assert {"get", "patch"} <= set(paths[f"{API}/cases/{kind}/{{case_id}}"])
         assert "post" in paths[f"{API}/cases/{kind}/{{case_id}}/assign"]
         assert "post" in paths[f"{API}/cases/{kind}/{{case_id}}/status"]
+    public_prefixes = (f"{API}/public/", f"{API}/devices/")
     for path, ops in paths.items():
-        if not path.startswith(API) or path in (f"{API}/auth/login", f"{API}/auth/refresh"):
+        unauthenticated = {
+            f"{API}/auth/login",
+            f"{API}/auth/refresh",
+            f"{API}/auth/register",
+            f"{API}/auth/forgot-password",
+            f"{API}/auth/reset-password",
+        }
+        if not path.startswith(API) or path in unauthenticated:
+            continue
+        if any(path.startswith(prefix) for prefix in public_prefixes):
             continue
         for method, op in ops.items():
+            if method == "parameters":
+                continue
             assert op.get("security"), f"{method.upper()} {path} is missing a security requirement"
             assert "401" in op["responses"], f"{method.upper()} {path} does not document 401"
 
@@ -65,6 +77,9 @@ PRODUCTION_OK = dict(
     rate_limit_backend="redis", redis_url="rediss://:x@redis.internal:6379/0", metrics_token="m" * 32,
     scan_mode="clamav", clamav_host="clamav.internal", cors_origins=["https://console.example.org"],
     workers_required=True, notification_provider="disabled", mfa_mode="disabled",
+    public_security_secret="public-security-secret-value-32chars-min",
+    public_intake_user_id="11111111-1111-1111-1111-111111111111",
+    public_intake_station_id="22222222-2222-2222-2222-222222222222",
 )
 
 

@@ -16,7 +16,7 @@ from app.common.errors import Conflict, Forbidden, NotFound, ValidationFailed
 from app.common.time import utcnow
 from app.config import get_settings
 from app.models import Case, CaseContact, CaseStatusHistory, Location, Station, User
-from app.models.enums import CaseStatus, Role
+from app.models.enums import CaseSource, CaseStatus, PublicReviewStatus, Role
 from app.observability.metrics import CASES_CREATED, count_after_commit
 from app.repositories import cases as case_repo
 from app.repositories.cases import CaseFilters
@@ -59,7 +59,17 @@ def _build_search_text(case_number: str, spec: CaseTypeSpec, detail: Any) -> str
 
 
 def _resolve_station(db: Session, user: User, requested: uuid.UUID | None) -> uuid.UUID:
-    if Role(user.role) is Role.ADMIN:
+    if Role(user.role) is Role.PUBLIC:
+        settings = get_settings()
+        if settings.public_intake_station_id is None:
+            raise ValidationFailed(
+                "Public case registration is not configured",
+                code="public_intake_unconfigured",
+            )
+        if requested is not None and requested != settings.public_intake_station_id:
+            raise Forbidden("PUBLIC accounts cannot choose a station", code="station_scope")
+        station_id = settings.public_intake_station_id
+    elif Role(user.role) is Role.ADMIN:
         if requested is None:
             raise ValidationFailed("station_id is required when an administrator registers a case", code="station_required")
         station_id = requested
@@ -127,6 +137,36 @@ def _set_contact(db: Session, case: Case, user: User, contact: str | None) -> No
         existing.updated_by_user_id = user.id
 
 
+def _set_public_contact(db: Session, case: Case, contact: dict[str, Any]) -> None:
+    """Stores structured public reporter contact. Caller supplies already-normalised phone/email values."""
+    from app.common.security_hash import keyed_hash, mask_email
+    from app.notifications import mask
+
+    existing = db.get(CaseContact, case.id)
+    phone = contact["mobile"]
+    email = contact.get("email")
+    # Public rows encrypt the verified mobile itself so automated notifications can reuse it safely.
+    values = dict(
+        contact_ciphertext=encrypt_text(phone),
+        updated_by_user_id=None,
+        reporter_name=contact.get("reporter_name"),
+        mobile_lookup_hash=keyed_hash(phone),
+        mobile_hint=mask(phone),
+        mobile_verified_at=contact.get("mobile_verified_at") or utcnow(),
+        email_ciphertext=encrypt_text(email) if email else None,
+        email_hint=mask_email(email) if email else None,
+        email_verified_at=contact.get("email_verified_at"),
+        preferred_locale=contact.get("preferred_locale"),
+        notification_consent_statement=contact.get("notification_consent_statement"),
+        notification_consent_at=contact.get("notification_consent_at"),
+    )
+    if existing is None:
+        db.add(CaseContact(case_id=case.id, **values))
+    else:
+        for key, value in values.items():
+            setattr(existing, key, value)
+
+
 def allocate_case_number(db: Session, spec: CaseTypeSpec, now: datetime | None = None) -> str:
     year = (now or datetime.now(CASE_NUMBER_TZ)).astimezone(CASE_NUMBER_TZ).year
     value = case_repo.allocate_case_number_value(db, spec.case_type, year)
@@ -140,9 +180,25 @@ def create_case(
     payload: BaseModel,
     *,
     idempotency_key: str | None = None,
+    source: CaseSource = CaseSource.STAFF,
+    public_review_status: PublicReviewStatus | None = None,
+    public_contact: dict[str, Any] | None = None,
+    skip_permission_check: bool = False,
 ) -> tuple[Case, bool]:
-    require_permission(user, Permission.CASE_CREATE)
+    if not skip_permission_check:
+        require_permission(user, Permission.CASE_CREATE, allow_public=True)
     data = payload.model_dump()
+    is_public_user = Role(user.role) is Role.PUBLIC
+    if is_public_user:
+        # Citizens cannot choose source/review state; force the public intake path.
+        source = CaseSource.PUBLIC
+        public_review_status = PublicReviewStatus.PENDING_VERIFICATION
+        if public_contact is None and user.phone_number:
+            public_contact = {
+                "mobile": user.phone_number,
+                "reporter_name": user.full_name,
+                "mobile_verified_at": utcnow(),
+            }
     station_id = _resolve_station(db, user, data.get("station_id"))
     client_record_id = data.get("client_record_id")
     device_id = data.get("device_id")
@@ -168,6 +224,8 @@ def create_case(
             station_id=station_id,
             reported_by_user_id=user.id,
             status=CaseStatus.OPEN,
+            source=source,
+            public_review_status=public_review_status,
             urgency_level=data.get("urgency_level"),
             client_id=data.get("client_id"),
             device_id=device_id,
@@ -182,12 +240,14 @@ def create_case(
         db.add(case)
         db.flush()
         db.add(detail)
-        if data.get("contact_details"):
+        if public_contact is not None:
+            _set_public_contact(db, case, public_contact)
+        elif not is_public_user and data.get("contact_details"):
             _set_contact(db, case, user, data["contact_details"])
         db.add(
             CaseStatusHistory(
                 case_id=case.id, from_status=None, to_status=CaseStatus.OPEN, changed_by_user_id=user.id,
-                reason="Case registered",
+                reason="Case registered" if source is CaseSource.STAFF else "Public case submitted",
             )
         )
         count_after_commit(db, CASES_CREATED, spec.case_type.value)
@@ -201,10 +261,12 @@ def create_case(
             after={
                 "case_type": spec.case_type,
                 "status": CaseStatus.OPEN,
+                "source": source,
+                "public_review_status": public_review_status,
                 "station_id": station_id,
                 "urgency_level": data.get("urgency_level"),
                 "fields_provided": sorted(k for k, v in detail_values.items() if v is not None),
-                "contact_details_provided": bool(data.get("contact_details")),
+                "contact_details_provided": bool(data.get("contact_details") or public_contact),
                 "location_id": data.get("location_id"),
                 "coordinates_provided": data.get("latitude") is not None,
                 "coordinate_source": data.get("coordinate_source"),
@@ -234,7 +296,7 @@ def create_case(
 
 
 def get_case(db: Session, user: User, case_id: uuid.UUID, spec: CaseTypeSpec | None = None) -> Case:
-    require_permission(user, Permission.CASE_READ)
+    require_permission(user, Permission.CASE_READ, allow_public=True)
     return load_case(db, user, case_id, spec=spec)
 
 
@@ -331,13 +393,55 @@ def update_case(
     return load_case(db, user, case_id, spec=spec), replayed
 
 
-def to_read(db: Session, case: Case, spec: CaseTypeSpec | None = None, contact_ids: set | None = None):
+def _case_in_scope(actor: User | None, case: Case) -> bool:
+    if actor is None:
+        return True
+    role = Role(actor.role)
+    if role is Role.ADMIN:
+        return True
+    if role is Role.PUBLIC:
+        return case.reported_by_user_id == actor.id
+    return actor.station_id is not None and case.station_id == actor.station_id
+
+
+def _verification_evidence_for(db: Session, actor: User | None, case: Case) -> str | None:
+    """Latest RESOLVED-status verification comment. Redacted unless the caller has note:sensitive."""
+    if actor is not None and not has_permission(actor, Permission.NOTE_SENSITIVE):
+        return None
+    evidence = db.scalar(
+        select(CaseStatusHistory.verification_evidence)
+        .where(
+            CaseStatusHistory.case_id == case.id,
+            CaseStatusHistory.to_status == CaseStatus.RESOLVED,
+            CaseStatusHistory.verification_evidence.is_not(None),
+        )
+        .order_by(CaseStatusHistory.created_at.desc(), CaseStatusHistory.id.desc())
+        .limit(1)
+    )
+    return evidence
+
+
+def to_read(
+    db: Session,
+    case: Case,
+    spec: CaseTypeSpec | None = None,
+    contact_ids: set | None = None,
+    *,
+    actor: User | None = None,
+):
     spec = spec or spec_for(case.case_type)
     if contact_ids is None:
         contact_ids = case_repo.has_contact(db, [case.id])
+    values = {
+        field: getattr(case, field)
+        for field in spec.read_schema.model_fields
+        if hasattr(case, field) and field not in ("details", "in_scope", "verification_evidence")
+    }
     return spec.read_schema(
-        **{field: getattr(case, field) for field in spec.read_schema.model_fields if hasattr(case, field) and field != "details"},
+        **values,
         has_contact_details=case.id in contact_ids,
+        in_scope=_case_in_scope(actor, case),
+        verification_evidence=_verification_evidence_for(db, actor, case),
         details=spec.details_read_schema.model_validate(_detail(case, spec)),
     )
 
@@ -345,11 +449,11 @@ def to_read(db: Session, case: Case, spec: CaseTypeSpec | None = None, contact_i
 def list_cases(
     db: Session, user: User, spec: CaseTypeSpec, filters: CaseFilters, *, limit: int, offset: int
 ) -> tuple[list, int]:
-    require_permission(user, Permission.CASE_READ)
+    require_permission(user, Permission.CASE_READ, allow_public=True)
     filters.case_type = spec.case_type
     rows, total = case_repo.search_cases(db, filters, case_visibility_clause(user), limit=limit, offset=offset)
     contact_ids = case_repo.has_contact(db, [c.id for c in rows])
-    return [to_read(db, c, spec, contact_ids) for c in rows], total
+    return [to_read(db, c, spec, contact_ids, actor=user) for c in rows], total
 
 
 def to_summary(case: Case, *, in_scope: bool) -> CaseSummary:
@@ -370,6 +474,7 @@ def to_summary(case: Case, *, in_scope: bool) -> CaseSummary:
         status=case.status,
         urgency_level=case.urgency_level,
         station_id=case.station_id,
+        reported_by_user_id=case.reported_by_user_id,
         assigned_to_user_id=case.assigned_to_user_id,
         title=getattr(detail, spec.title_field) if spec.title_field and detail is not None else None,
         location=getattr(detail, spec.location_field) if detail is not None else None,
@@ -389,7 +494,7 @@ def search_all(
     db: Session, user: User, filters: CaseFilters, *, all_stations: bool, limit: int, offset: int
 ) -> tuple[list[CaseSummary], int]:
     """Unified search. `all_stations` (police and admins) widens results to summaries from other stations."""
-    require_permission(user, Permission.CASE_READ)
+    require_permission(user, Permission.CASE_READ, allow_public=True)
     scoped = case_visibility_clause(user)
     if all_stations:
         require_permission(user, Permission.CASE_SEARCH_ALL_STATIONS)

@@ -78,6 +78,8 @@ def process_photo(db: Session, storage: ObjectStorage, attachment_id: uuid.UUID)
     attachment = db.get(CaseAttachment, attachment_id)
     if attachment is None or attachment.deleted_at is not None:
         return None
+    if attachment.case_id is None:
+        return None  # Public sighting photos are never face-matched.
     if attachment.media_type != MediaType.PHOTO or not is_downloadable(attachment):
         return None
     case = db.get(Case, attachment.case_id)

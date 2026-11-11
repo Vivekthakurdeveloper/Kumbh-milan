@@ -30,14 +30,14 @@ Gap IDs are stable and are cited from the other documents in this folder.
 | G-14 | `CaseSummary.location_id` always `null` | P1 | Mandatory (defect) | Search, nearby, matching | **Resolved** (`to_summary` sets it; age/gender also added) |
 | G-4 | Unassign, team assignment, assign to help desk | P2 | Optional | Assign | Open |
 | G-5 | Reference data: item categories and enums | P2 | Optional | Registration, filters | Open |
-| G-8 | Dashboard breakdowns, trends, activity feed | P2 | Optional | Dashboard | Open |
+| G-8 | Dashboard breakdowns, trends, activity feed | P2 | Optional | Dashboard | Partial — `from`/`to` Asia/Kolkata date filtering added; location/activity feed still open |
 | G-10 | More list filters (location_id, sector, custody, reporter) | P2 | Optional | Case lists | Open |
 | G-11 | More sort orders (urgency, event time) | P2 | Optional | Case lists | Open |
 | G-12 | Duplicate-registration detection | P2 | Optional | Registration | Open |
 | G-19 | Staff in-app notifications | P2 | Optional | Staff notifications | Open |
 | G-21 | Additional reports and aggregates | P2 | Optional | Reports | Open |
 | G-6 | Supervisor approval and assignee notification | P3 | Optional | Assign | Open |
-| G-13 | Self-service password reset | P3 | Optional | Login | Open |
+| G-13 | Self-service password reset | P3 | Optional | Login | Closed for PUBLIC token workflow; SMS delivery remains blocked without provider/templates |
 | G-18 | Discoverable MFA mode | P3 | Optional | Profile | Open |
 | G-20 | Realtime updates (SSE/WebSocket) | P3 | Optional | Dashboard, lists | Open |
 | G-22 | Per-case activity timeline for non-admins | P3 | Optional | Case details | Open |

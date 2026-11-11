@@ -19,6 +19,7 @@ from app.schemas.cases import (
 from app.schemas.common import Page, PageParams
 from app.schemas.geo import CaseMap, NearbyCase
 from app.schemas.notifications import NotificationCreate, NotificationRead
+from app.schemas.public import PublicReviewRequest
 from app.schemas.workflow import (
     MatchGenerateResult,
     AssignRequest,
@@ -42,6 +43,7 @@ from app.services import cases as case_service
 from app.services import geo as geo_service
 from app.services import matching as matching_service
 from app.services import notifications as notification_service
+from app.services import public_cases as public_case_service
 from app.services import workflow as workflow_service
 from app.services.case_types import CASE_TYPE_SPECS, CaseTypeSpec
 from app.storage import ObjectStorage, get_storage
@@ -127,7 +129,7 @@ def build_case_type_router(spec: CaseTypeSpec) -> APIRouter:
         case, replayed = case_service.create_case(db, principal.user, spec, payload, idempotency_key=idempotency_key)
         if replayed:
             response.headers["Idempotent-Replayed"] = "true"
-        return case_service.to_read(db, case, spec)
+        return case_service.to_read(db, case, spec, actor=principal.user)
 
     @router.get(
         "", response_model=Page[Read], responses=AUTHED, name=f"list_{spec.relationship}",
@@ -139,7 +141,9 @@ def build_case_type_router(spec: CaseTypeSpec) -> APIRouter:
 
     @router.get("/{case_id}", response_model=Read, responses=NOT_FOUND, name=f"get_{spec.relationship}")
     def detail(case_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession):
-        return case_service.to_read(db, case_service.get_case(db, principal.user, case_id, spec), spec)
+        return case_service.to_read(
+            db, case_service.get_case(db, principal.user, case_id, spec), spec, actor=principal.user
+        )
 
     @router.patch("/{case_id}", response_model=Read, responses=STATE, name=f"update_{spec.relationship}")
     def update(
@@ -154,7 +158,7 @@ def build_case_type_router(spec: CaseTypeSpec) -> APIRouter:
             db, principal.user, spec, case_id, payload, idempotency_key=idempotency_key
         )
         _mark_replay(response, replayed)
-        return case_service.to_read(db, case, spec)
+        return case_service.to_read(db, case, spec, actor=principal.user)
 
     @router.post(
         "/{case_id}/assign", response_model=Read, responses=STATE, name=f"assign_{spec.relationship}",
@@ -167,7 +171,9 @@ def build_case_type_router(spec: CaseTypeSpec) -> APIRouter:
         replayed = workflow_service.assign_case(db, principal.user, spec, case_id, payload, idempotency_key=idempotency_key)
         _mark_replay(response, replayed)
         db.expire_all()
-        return case_service.to_read(db, case_service.get_case(db, principal.user, case_id, spec), spec)
+        return case_service.to_read(
+            db, case_service.get_case(db, principal.user, case_id, spec), spec, actor=principal.user
+        )
 
     @router.post(
         "/{case_id}/status", response_model=Read, responses=STATE, name=f"status_{spec.relationship}",
@@ -182,7 +188,9 @@ def build_case_type_router(spec: CaseTypeSpec) -> APIRouter:
         )
         _mark_replay(response, replayed)
         db.expire_all()
-        return case_service.to_read(db, case_service.get_case(db, principal.user, case_id, spec), spec)
+        return case_service.to_read(
+            db, case_service.get_case(db, principal.user, case_id, spec), spec, actor=principal.user
+        )
 
     if spec.case_type is CaseType.FOUND_ITEM:
 
@@ -199,7 +207,9 @@ def build_case_type_router(spec: CaseTypeSpec) -> APIRouter:
             )
             _mark_replay(response, replayed)
             db.expire_all()
-            return case_service.to_read(db, case_service.get_case(db, principal.user, case_id, spec), spec)
+            return case_service.to_read(
+                db, case_service.get_case(db, principal.user, case_id, spec), spec, actor=principal.user
+            )
 
     return router
 
@@ -278,7 +288,7 @@ def map_cases(
 
 @shared.get("/{case_id}", response_model=AnyCaseRead, responses=NOT_FOUND, summary="Get any case by id")
 def get_any_case(case_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession):
-    return case_service.to_read(db, case_service.get_case(db, principal.user, case_id))
+    return case_service.to_read(db, case_service.get_case(db, principal.user, case_id), actor=principal.user)
 
 
 @shared.post(
@@ -288,6 +298,17 @@ def get_any_case(case_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession)
 def reveal_contact(case_id: uuid.UUID, payload: ContactRevealRequest, principal: CurrentPrincipal, db: DbSession):
     contact = case_service.reveal_contact(db, principal.user, case_id, payload.reason_code)
     return ContactRead(case_id=case_id, contact_details=contact)
+
+
+@shared.post(
+    "/{case_id}/public-review",
+    response_model=AnyCaseRead,
+    responses=STATE,
+    summary="Accept or reject a public citizen submission awaiting staff verification",
+)
+def public_review(case_id: uuid.UUID, payload: PublicReviewRequest, principal: CurrentPrincipal, db: DbSession):
+    case = public_case_service.review_public_case(db, principal.user, case_id, payload)
+    return case_service.to_read(db, case, actor=principal.user)
 
 
 @shared.get("/{case_id}/notes", response_model=Page[NoteRead], responses=NOT_FOUND)

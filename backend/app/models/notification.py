@@ -54,7 +54,7 @@ class Notification(TimestampMixin, Base):
     channel: Mapped[NotificationChannel] = mapped_column(enum_type(NotificationChannel, "notification_channel"), nullable=False)
     locale: Mapped[str] = mapped_column(String(8), nullable=False)
     recipient_ciphertext: Mapped[str | None] = mapped_column(Text)
-    recipient_hint: Mapped[str | None] = mapped_column(String(16))
+    recipient_hint: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[NotificationStatus] = mapped_column(enum_type(NotificationStatus, "notification_status"), nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -65,7 +65,11 @@ class Notification(TimestampMixin, Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)
     consent_statement: Mapped[str] = mapped_column(Text, nullable=False)
-    requested_by_user_id: Mapped[uuid.UUID] = _user()
+    requested_by_user_id: Mapped[uuid.UUID | None] = _user(nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(200))
+    device_token_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("push_device_tokens.id", ondelete="SET NULL")
+    )
 
 
 class StaffNotification(CreatedAtMixin, Base):

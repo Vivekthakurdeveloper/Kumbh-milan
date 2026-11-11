@@ -15,8 +15,9 @@ from app.observability import configure_logging
 DESCRIPTION = """
 Case management for missing persons, found persons, lost items, and found items at Haridwar Kumbh Mela 2027.
 
-All `/api/v1` endpoints except login and refresh require `Authorization: Bearer <access token>`.
-Visibility is scoped by role and station; ids outside your scope return 404.
+Staff `/api/v1` endpoints require `Authorization: Bearer <access token>` except login/refresh.
+Citizen `/api/v1/public/*` endpoints are unauthenticated but OTP-gated where required.
+Visibility for staff APIs is scoped by role and station; ids outside your scope return 404.
 Errors use `{"error": {"code", "message", "request_id", "details"}}`.
 """
 
@@ -48,7 +49,13 @@ def create_app() -> FastAPI:
             allow_origins=settings.cors_origins,
             allow_credentials=False,
             allow_methods=["GET", "POST", "PATCH", "DELETE"],
-            allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "Idempotency-Key",
+                "X-Request-ID",
+                "X-Verified-Mobile-Token",
+            ],
             expose_headers=["X-Request-ID", "Idempotent-Replayed", "Retry-After"],
         )
     app.add_middleware(RequestGuardMiddleware, settings=settings)

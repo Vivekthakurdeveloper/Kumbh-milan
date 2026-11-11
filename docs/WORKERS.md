@@ -18,7 +18,9 @@ Workers are OS processes. A CLI command that is not supervised is not a running 
 - Heartbeats are upserts in `worker_heartbeats`. A database error is logged as the exception type and does not kill the loop.
 - `/ready` treats a worker as missing when `WORKERS_REQUIRED=true` and the row is absent, not `ok`, or older than `WORKER_HEARTBEAT_MAX_AGE_SECONDS` (default 180).
 - Notification delivery is idempotent on the outbox key. The mock provider can raise a temporary `ProviderError`; the row stays retryable.
-- Do not point these processes at the operational database until the schema there is at `0007` by an approved migration.
+- The notifications worker dispatches `SMS` / `WHATSAPP` (MSG91 or mock), `EMAIL` (SMTP), and `PUSH` (Firebase FCM). Permanent FCM invalid-token responses deactivate the stored device token. Install the optional `push` extra on worker images when FCM is enabled.
+- Maintenance should continue to purge expired OTP challenge rows alongside idempotency keys and sessions.
+- Do not point these processes at the operational database until the schema there is at `0010` by an approved migration.
 
 ## Local start
 

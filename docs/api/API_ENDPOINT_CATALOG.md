@@ -1,22 +1,22 @@
 # API endpoint catalog
 
-Complete inventory of every HTTP operation in the FastAPI application (`backend/app/main.py`). The list was produced by importing the app and reading its generated OpenAPI document ([openapi.json](./openapi.json)): **63 paths, 83 operations** (81 under `/api/v1`, plus `/health` and `/ready`). One more route, `GET /metrics`, is excluded from the schema and listed separately.
+Complete inventory of every HTTP operation in the FastAPI application (`backend/app/main.py`). The list was produced by importing the app and reading its generated OpenAPI document ([openapi.json](./openapi.json)). One more route, `GET /metrics`, is excluded from the schema and listed separately. Phase 4 adds the public citizen portal, sightings staff APIs, public-information admin APIs, and device push-token routes.
 
 Detailed request and response contracts are in [API_REQUEST_RESPONSE_REFERENCE.md](./API_REQUEST_RESPONSE_REFERENCE.md).
 
 ## How to read this catalog
 
-**Roles** are the three that exist in code: `ADMIN`, `POLICE_OFFICER` ("Police"), `HELP_DESK_OPERATOR` ("Help desk"). "All roles" means any authenticated active user. The permission each role holds is defined in `backend/app/auth/permissions.py` (matrix in section 12).
+**Roles** in code: `ADMIN`, `POLICE_OFFICER` ("Police"), `HELP_DESK_OPERATOR` ("Help desk"), and `PUBLIC` (citizen self-registration). "All roles" means any authenticated active user unless a row says otherwise. Staff permission strings are defined in `backend/app/auth/permissions.py` (matrix in section 12). `PUBLIC` returns `permissions: []` from `/auth/me`; allowed case routes are gated by a default-deny allowlist plus reporter ownership.
 
 **Auth**: "Bearer" means `Authorization: Bearer <access_token>` is required. Missing or invalid credentials return `401`.
 
-**Scope**: case endpoints apply row-level visibility. A case outside the caller's scope returns `404 case_not_found`, never `403`, so existence is not leaked.
+**Scope**: case endpoints apply row-level visibility. A case outside the caller's scope returns `404 case_not_found`, never `403`, so existence is not leaked. PUBLIC callers only see cases where `reported_by_user_id` is themselves.
 
 **Status** (implementation status, per the classification requested for this documentation):
 
 | Label | Meaning |
 |---|---|
-| **Implemented — tested** | Code inspected; route present in the generated OpenAPI; exercised by an automated test in `backend/tests/` and/or the live HTTP harness `qa/api_smoke.py`. Latest full pytest: `docs/TESTING.md` (233 passed / 3 skipped, 2026-11-05). Earlier HTTP harness: `docs/evidence/QA_LOCAL_RUN.md` (144/144). |
+| **Implemented — tested** | Code inspected; route present in the generated OpenAPI; exercised by an automated test in `backend/tests/` and/or the live HTTP harness `qa/api_smoke.py`. Latest full pytest: `docs/TESTING.md` (290 passed / 1 skipped). Earlier HTTP harness: `docs/evidence/QA_LOCAL_RUN.md` (144/144). |
 | **Implemented — no test found** | Code inspected and route present, but no test exercising it was found. |
 | **Partial** | Endpoint exists but does not cover the full product requirement (see the gap register). |
 | **Blocked** | Endpoint exists but its effect depends on an unresolved external dependency. |
@@ -39,7 +39,10 @@ Not for frontend use except an optional "service status" indicator using `/healt
 
 | Method | Path | Purpose / screen | Auth | Roles | Success | Main error codes | Status | Handler |
 |---|---|---|---|---|---|---|---|---|
-| POST | `/api/v1/auth/login` | Login screen | None | — | 200 `TokenResponse` | 401 `invalid_credentials`; 429 `account_temporarily_locked`, `too_many_requests`; 422 | Implemented — tested | `v1/auth.py:login` |
+| POST | `/api/v1/auth/register` | Citizen self-registration (always PUBLIC) | None | — | 201 `TokenResponse` | 409 `duplicate`; 422 `weak_password`, `invalid_phone`; 429 | **Newly added — tested** | `v1/auth.py:register` |
+| POST | `/api/v1/auth/forgot-password` | Request PUBLIC password-reset token | None | — | 200 `MessageResponse` (anti-enumeration) | 422; 429 | **Newly added — tested** (SMS delivery blocked without provider) | `v1/auth.py:forgot_password` |
+| POST | `/api/v1/auth/reset-password` | Complete PUBLIC password reset | None | — | 204 | 401 `invalid_reset_token`; 422 `weak_password`; 429 | **Newly added — tested** | `v1/auth.py:reset_password` |
+| POST | `/api/v1/auth/login` | Login screen (staff + PUBLIC) | None | — | 200 `TokenResponse` | 401 `invalid_credentials`; 429 `account_temporarily_locked`, `too_many_requests`; 422 | Implemented — tested | `v1/auth.py:login` |
 | POST | `/api/v1/auth/refresh` | Silent token refresh | None (refresh token in body) | — | 200 `TokenResponse` | 401 `invalid_refresh_token`, `session_revoked`; 422 | Implemented — tested | `v1/auth.py:refresh` |
 | POST | `/api/v1/auth/logout` | Logout | Bearer | All roles | 204 | 401 | Implemented — tested | `v1/auth.py:logout` |
 | GET | `/api/v1/auth/me` | Current user, role, permissions (app shell) | Bearer | All roles | 200 `MeResponse` | 401 | Implemented — tested | `v1/auth.py:me` |
@@ -180,8 +183,34 @@ The whole router depends on `retention:manage`, so non-admins get `403` before v
 
 | Method | Path | Purpose / screen | Roles | Success | Errors | Status | Handler |
 |---|---|---|---|---|---|---|---|
-| GET | `/api/v1/dashboard/summary` | Home dashboard counts (scoped) | All roles | 200 `DashboardSummary` | 401 | **Partial** (counts only; no breakdowns by location/date, no activity feed) | `v1/dashboard.py:summary` |
+| GET | `/api/v1/dashboard/summary` | Home dashboard counts (scoped); optional `from`/`to` Asia/Kolkata dates | Staff (`case:read`) | 200 `DashboardSummary` | 401; 422 `invalid_range` | **Modified — tested** (date filtering added; no location/activity feed) | `v1/dashboard.py:summary` |
 | GET | `/api/v1/reports/cases.csv` | CSV export | All roles (scoped) | 200 `text/csv`, headers `X-Export-Rows`, `X-Export-Truncated` | 422 `invalid_range`, `range_too_large` | **Partial** (one report, ≤31 days, ≤1000 rows, 6 columns) | `v1/reports.py:export_cases` |
+
+## 11b. Public citizen portal (`/api/v1/public`)
+
+Unauthenticated except where noted. OTP and submit routes are IP rate-limited (`RATE_LIMIT_PUBLIC_*`).
+
+| Method | Path | Purpose / screen | Auth | Success | Main error codes | Status | Handler |
+|---|---|---|---|---|---|---|---|
+| POST | `/api/v1/public/otp/request` | Pre-verify mobile for report/sighting | None | 200 `OtpRequestResponse` | 422 `wrong_endpoint`; 429 | Implemented — tested | `v1/public.py:request_otp` |
+| POST | `/api/v1/public/otp/verify` | Issue verified-mobile token | None | 200 `VerifiedMobileResponse` | 401; 422; 429 | Implemented — tested | `v1/public.py:verify_otp` |
+| POST | `/api/v1/public/status/request-otp` | Status OTP (always non-enumerating) | None | 200 `OtpRequestResponse` | 422; 429 | Implemented — tested | `v1/public.py:status_request_otp` |
+| POST | `/api/v1/public/status/verify-otp` | Case-scoped status JWT | None | 200 `CaseStatusTokenResponse` | 401; 422; 429 | Implemented — tested | `v1/public.py:status_verify_otp` |
+| GET | `/api/v1/public/cases/{case_id}/status` | Privacy-safe public status | Bearer status JWT | 200 `PublicCaseStatusRead` | 401; 404 | Implemented — tested | `v1/public.py:case_status` |
+| POST | `/api/v1/public/missing-persons` | Citizen missing-person report | `X-Verified-Mobile-Token` + `Idempotency-Key` | 201/200 `PublicSubmissionAck` | 401; 409; 413; 415; 422; 429; 503 | Implemented — tested | `v1/public.py:submit_missing_person` |
+| POST | `/api/v1/public/sightings` | Citizen sighting (+ optional photo) | `X-Verified-Mobile-Token` | 201 `PublicSightingAck` | 401; 413; 415; 422; 429; 503 | Implemented — tested | `v1/public.py:submit_sighting` |
+| GET | `/api/v1/public/information` | Published bilingual public info | None | 200 `PublicInformationList` | — | Implemented — tested | `v1/public.py:public_information` |
+
+Staff extensions:
+
+| Method | Path | Purpose | Roles | Success | Status | Handler |
+|---|---|---|---|---|---|---|
+| POST | `/api/v1/cases/{case_id}/public-review` | Verify/reject public report | `case:review` | 200 case summary | Implemented — tested | `v1/cases.py:public_review` |
+| GET | `/api/v1/sightings` | Station-scoped sighting list | `sighting:read` | 200 `Page[SightingRead]` | Implemented — tested | `v1/public.py:list_sightings` |
+| GET | `/api/v1/sightings/{sighting_id}` | Sighting detail | `sighting:read` | 200 `SightingRead` | Implemented — tested | `v1/public.py:get_sighting` |
+| GET | `/api/v1/sightings/{sighting_id}/photo` | Presigned sighting photo | `sighting:read` | 200 `AttachmentDownload` | Implemented — tested | `v1/public.py:get_sighting_photo` |
+| GET/POST/PATCH | `/api/v1/admin/public-information…` | Admin list/create/update/publish/unpublish | `public_information:manage` | 200/201 | Implemented — tested | `v1/public.py:admin_*` |
+| POST/DELETE | `/api/v1/devices/push-token` | Register/deactivate FCM token | Staff JWT or citizen status JWT | 204 | Implemented — tested | `v1/devices.py` |
 
 ## 12. Totals
 
@@ -193,47 +222,53 @@ The whole router depends on `retention:manage`, so non-admins get `403` before v
 | Users | 7 |
 | Locations | 6 |
 | Case-type endpoints | 25 |
-| Shared case operations | 19 |
+| Shared case operations | 20 (+ public-review) |
 | Match review queue | 4 |
 | Staff notifications | 2 |
 | Audit | 1 |
 | Retention and legal holds | 10 |
 | Dashboard | 1 |
 | Reports | 1 |
-| **Total in OpenAPI** | **88** |
+| Public portal | 8 |
+| Sightings (staff) | 3 |
+| Public information admin | 5 |
+| Devices | 2 |
+| **Total in OpenAPI** | **91 paths / 113 operations** |
 | `/metrics` (outside OpenAPI) | 1 |
 
-Status counts for the 88 OpenAPI operations: Phase 2 adds face-candidate detail, photo URLs, match history, and in-app staff notifications. `POST /cases/{id}/notifications` remains **blocked** for real SMS/WhatsApp delivery (no provider). Missing endpoints are listed in [API_GAP_ANALYSIS.md](./API_GAP_ANALYSIS.md).
+Phase 4 adds citizen OTP intake, status access, sightings, lifecycle EMAIL/PUSH outbox adapters (MSG91/SMTP/FCM), and public information. PUBLIC self-registration / restricted case access and password-reset token APIs are also documented above. Live SMS/email/push delivery remains **blocked / not verified** until credentials and DLT/APNs approvals are supplied. See [PHASE4_PUBLIC_PORTAL.md](../evidence/PHASE4_PUBLIC_PORTAL.md).
 
 ## 13. Role → permission matrix (from `backend/app/auth/permissions.py`)
 
-`GET /auth/me` returns the caller's permission strings in `permissions`. Use them for UI gating instead of hard-coding roles.
+`GET /auth/me` returns the caller's permission strings in `permissions`. Use them for UI gating instead of hard-coding roles. **PUBLIC always receives `permissions: []`.**
 
-| Permission string | Help desk | Police | Admin | Used by |
-|---|---|---|---|---|
-| `case:create` | ✓ | ✓ | ✓ | Register cases |
-| `case:read` | ✓ | ✓ | ✓ | All case reads, notes, attachments list, history, matches, match queue, user directory, notifications list, dashboard, CSV |
-| `case:update` | ✓ | ✓ | ✓ | PATCH case |
-| `case:review` | ✓ | ✓ | ✓ | Status → `UNDER_REVIEW` |
-| `note:create` | ✓ | ✓ | ✓ | Add note |
-| `attachment:upload` | ✓ | ✓ | ✓ | Upload |
-| `attachment:download` | ✓ | ✓ | ✓ | Download URL |
-| `match:propose` | ✓ | ✓ | ✓ | Propose match, generate matches |
-| `notification:send` | ✓ | ✓ | ✓ | Queue notification |
-| `user:list_assignable` | | ✓ | ✓ | Assignable officers |
-| `case:search_all_stations` | | ✓ | ✓ | `all_stations=true` |
-| `case:assign` | | ✓ | ✓ | Assign; status → `ASSIGNED` |
-| `case:resolve` | | ✓ | ✓ | Status → `MATCH_FOUND`, `RESOLVED`, `CLOSED`, `REOPENED` |
-| `case:custody_update` | | ✓ | ✓ | Custody |
-| `case:contact_read` | | ✓ | ✓ | Contact reveal |
-| `note:sensitive` | | ✓ | ✓ | Create/read sensitive notes; see `verification_evidence`, `review_evidence`, `revocation_reason` |
-| `attachment:delete` | | ✓ | ✓ | Delete attachment |
-| `match:review` | | ✓ | ✓ | Confirm/reject/revoke |
-| `user:manage` | | | ✓ | Users CRUD, reset password |
-| `station:manage` | | | ✓ | Stations create/update |
-| `location:manage` | | | ✓ | Locations create/update |
-| `retention:manage` | | | ✓ | Retention, legal holds |
-| `audit:read` | | | ✓ | Audit log |
+| Permission string | Help desk | Police | Admin | PUBLIC | Used by |
+|---|---|---|---|---|---|
+| `case:create` | ✓ | ✓ | ✓ | | Register cases (PUBLIC create uses route allowlist, not this string) |
+| `case:read` | ✓ | ✓ | ✓ | | All case reads, notes, attachments list, history, matches, match queue, user directory, notifications list, dashboard, CSV |
+| `case:update` | ✓ | ✓ | ✓ | | PATCH case |
+| `case:review` | ✓ | ✓ | ✓ | | Status → `UNDER_REVIEW`; public-report verify/reject |
+| `sighting:read` | ✓ | ✓ | ✓ | | Staff sighting list/detail/photo |
+| `note:create` | ✓ | ✓ | ✓ | | Add note |
+| `attachment:upload` | ✓ | ✓ | ✓ | | Upload |
+| `attachment:download` | ✓ | ✓ | ✓ | | Download URL |
+| `match:propose` | ✓ | ✓ | ✓ | | Propose match, generate matches |
+| `notification:send` | ✓ | ✓ | ✓ | | Queue notification |
+| `user:list_assignable` | | ✓ | ✓ | | Assignable officers |
+| `case:search_all_stations` | | ✓ | ✓ | | `all_stations=true` |
+| `case:assign` | | ✓ | ✓ | | Assign; status → `ASSIGNED` |
+| `case:resolve` | | ✓ | ✓ | | Status → `MATCH_FOUND`, `RESOLVED`, `CLOSED`, `REOPENED` |
+| `case:custody_update` | | ✓ | ✓ | | Custody |
+| `case:contact_read` | | ✓ | ✓ | | Contact reveal |
+| `note:sensitive` | | ✓ | ✓ | | Create/read sensitive notes; see `verification_evidence`, `review_evidence`, `revocation_reason` |
+| `attachment:delete` | | ✓ | ✓ | | Delete attachment |
+| `match:review` | | ✓ | ✓ | | Confirm/reject/revoke; match photo URLs |
+| `user:manage` | | | ✓ | | Users CRUD, reset password |
+| `station:manage` | | | ✓ | | Stations create/update |
+| `location:manage` | | | ✓ | | Locations create/update |
+| `retention:manage` | | | ✓ | | Retention, legal holds |
+| `audit:read` | | | ✓ | | Audit log |
+| `public_information:manage` | | | ✓ | | Public information publish/unpublish |
 
 ### Case visibility (row-level scope, `backend/app/auth/scope.py`)
 
@@ -242,5 +277,6 @@ Status counts for the 88 OpenAPI operations: Phase 2 adds face-candidate detail,
 | Admin | Every case. |
 | Police | Cases at own station, cases assigned to them, cases they reported, and cases linked to an own-station case by a `CONFIRMED` match or a `MANUAL` `PROPOSED` match. Automatic suggestions alone never widen access. |
 | Help desk | Cases at own station that are **not archived**. |
+| PUBLIC | Only non-archived cases where `reported_by_user_id` is the authenticated citizen. |
 
 With `all_stations=true`, police and admins also receive **summaries** of out-of-scope cases (`in_scope: false`); opening such a case by id still returns `404` unless it is in scope.
