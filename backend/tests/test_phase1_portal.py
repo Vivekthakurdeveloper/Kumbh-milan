@@ -254,6 +254,21 @@ def test_user_directory_returns_minimal_fields_for_all_roles(client, actors):
             assert "police_badge_number" not in row
 
 
+def test_assignable_officers_include_username_and_role_without_contact_fields(client, actors):
+    r = client.get(f"{API}/users/assignable-officers", headers=actors.police.headers)
+    assert r.status_code == 200, r.text
+    rows = {row["username"]: row for row in r.json()}
+    assert set(rows) == {"police", "police2"}  # own station only
+    for row in rows.values():
+        assert set(row.keys()) == {"id", "full_name", "username", "role", "police_badge_number", "station_id"}
+        assert row["role"] == "POLICE_OFFICER"
+    assert rows["police"]["police_badge_number"] == "UK-1"
+
+    denied = client.get(f"{API}/users/assignable-officers", headers=actors.helpdesk.headers)
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "permission_denied"
+
+
 def test_match_queue_redacts_out_of_scope_side_for_helpdesk(client, actors):
     # Own-station missing person + other-station found person, linked by a manual proposal
     # from police (which grants visibility of the counterpart to police, not help desk).
