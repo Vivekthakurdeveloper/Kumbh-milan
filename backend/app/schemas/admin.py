@@ -78,8 +78,12 @@ class UserRead(ReadModel):
 
 
 class OfficerSummary(ReadModel):
+    """One row of GET /users/assignable-officers (police and admins only). No contact fields."""
+
     id: uuid.UUID
     full_name: str
+    username: str
+    role: Role
     police_badge_number: str | None
     station_id: uuid.UUID | None
 

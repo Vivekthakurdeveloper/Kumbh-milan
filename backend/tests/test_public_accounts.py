@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from datetime import date, timedelta
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
@@ -323,6 +324,36 @@ def test_dashboard_date_filter_kolkata_inclusive(client, actors):
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "invalid_range"
     _ = created
+
+
+def test_dashboard_accepts_kolkata_datetime_bounds_from_the_desk(client, actors):
+    create_case(client, actors.helpdesk, "missing-persons")
+    today = utcnow().astimezone(ZoneInfo("Asia/Kolkata")).date().isoformat()
+
+    for start in (today, (date.fromisoformat(today) - timedelta(days=6)).isoformat()):
+        response = client.get(
+            f"{API}/dashboard/summary",
+            headers=actors.helpdesk.headers,
+            params={"from": f"{start}T00:00:00+05:30", "to": f"{today}T23:59:59+05:30"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["registered_today"] == 1
+        assert response.json()["active_total"] == 1
+
+    past = client.get(
+        f"{API}/dashboard/summary",
+        headers=actors.helpdesk.headers,
+        params={"from": "2020-01-01T00:00:00+05:30", "to": "2020-01-01T23:59:59+05:30"},
+    )
+    assert past.status_code == 200
+    assert past.json()["registered_today"] == 0
+    assert past.json()["active_total"] == 0
+
+    garbage = client.get(
+        f"{API}/dashboard/summary", headers=actors.helpdesk.headers, params={"from": "yesterday", "to": today}
+    )
+    assert garbage.status_code == 422
+    assert garbage.json()["error"]["code"] == "invalid_range"
 
 
 # --- Case detail fields --------------------------------------------------------------------------
