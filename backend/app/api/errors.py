@@ -19,8 +19,10 @@ _STATUS_CODES = {
     404: "not_found",
     405: "method_not_allowed",
     409: "conflict",
+    410: "gone",
     413: "payload_too_large",
     415: "unsupported_media_type",
+    416: "range_not_satisfiable",
     422: "validation_failed",
     429: "too_many_requests",
 }

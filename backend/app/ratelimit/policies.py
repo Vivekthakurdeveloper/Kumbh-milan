@@ -5,7 +5,7 @@ Keys: abuse-prone unauthenticated endpoints (login, refresh) are limited per cli
 are limited per user, so officers sharing one NAT address at a control room do not throttle each other.
 
 Failure policy when the shared store is unavailable:
-- fail_closed (login, refresh, password change): reject with 503. Failing open would remove brute-force
+- fail_closed (login, refresh, password change, forgot/reset password): reject with 503. Failing open would remove brute-force
   protection exactly when an attacker might be overloading the store.
 - otherwise: fall back to this replica's in-memory limiter (degraded, per-process) and record the error.
 """

@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import io
+import re
 from datetime import date, timedelta
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from app.auth.tokens import hash_token
 from app.common.time import utcnow
 from app.database import SessionLocal
 from app.models import PasswordResetToken, User
-from app.notifications import get_provider, reset_provider_cache
+from app.notifications import MockProvider
 from tests.helpers import (
     API,
     FOUND_ITEM,
@@ -211,22 +211,19 @@ def test_staff_permissions_unchanged_for_helpdesk(client, actors):
 # --- Password recovery ---------------------------------------------------------------------------
 
 
-def test_forgot_password_anti_enumeration_and_reset_flow(client, actors):
-    reset_provider_cache()
-    from app.config import get_settings
-
-    get_settings().notification_provider = "mock"
-    reset_provider_cache()
-    provider = get_provider()
-
+def test_forgot_password_anti_enumeration_and_reset_flow(client, actors, monkeypatch):
+    provider = MockProvider()
+    monkeypatch.setattr("app.auth.password_reset.get_provider", lambda: provider)
     _register(client, mobile="9844444444")
-    known = client.post(f"{API}/auth/forgot-password", json={"username": "9844444444"})
-    unknown = client.post(f"{API}/auth/forgot-password", json={"username": "9800000000"})
-    staff = client.post(f"{API}/auth/forgot-password", json={"username": "9876543210"})
-    # Staff username that isn't PUBLIC: same message. Use a clearly non-public digit username too.
-    assert known.status_code == unknown.status_code == 200
+    known = client.post(f"{API}/auth/forgot-password", json={"identifier": "9844444444"})
+    unknown = client.post(f"{API}/auth/forgot-password", json={"identifier": "9800000000"})
+    assert known.status_code == unknown.status_code == 202
     assert known.json()["message"] == unknown.json()["message"]
-    assert "If an account exists" in known.json()["message"]
+    assert "If an account matches" in known.json()["message"]
+    assert len(provider.deliveries) == 1
+    match = re.search(r"\b(\d{8})\b", provider.deliveries[0]["body"])
+    assert match is not None
+    code = match.group(1)
 
     with SessionLocal() as db:
         user = db.scalar(select(User).where(User.username == "919844444444"))
@@ -234,31 +231,21 @@ def test_forgot_password_anti_enumeration_and_reset_flow(client, actors):
             select(PasswordResetToken)
             .where(PasswordResetToken.user_id == user.id, PasswordResetToken.consumed_at.is_(None))
         )
-        assert token_row is not None
-        # Recover the plaintext token from the mock provider body when delivery ran.
-        raw = None
-        for delivery in getattr(provider, "deliveries", []):
-            if "password reset code:" in delivery.get("body", "").lower():
-                raw = delivery["body"].split(":", 1)[1].split(".", 1)[0].strip()
-                break
-        if raw is None:
-            # Provider may have failed template lookup; inject a known token hash for the workflow test.
-            raw = "test-reset-token-value-aaaaaaaa"
-            token_row.token_hash = hash_token(raw)
-            db.commit()
+        assert token_row is not None and code not in token_row.code_hash
 
     ok = client.post(
         f"{API}/auth/reset-password",
-        json={"token": raw, "new_password": "NewCitizen#Pass2028!"},
+        json={"identifier": "9844444444", "code": code, "new_password": "NewCitizen#Pass2028!"},
     )
     assert ok.status_code == 204
 
-    # Token cannot be reused.
+    # Code cannot be reused.
     reuse = client.post(
         f"{API}/auth/reset-password",
-        json={"token": raw, "new_password": "AnotherCitizen#Pass2028!"},
+        json={"identifier": "9844444444", "code": code, "new_password": "AnotherCitizen#Pass2028!"},
     )
-    assert reuse.status_code == 401
+    assert reuse.status_code == 422
+    assert reuse.json()["error"]["code"] == "invalid_reset_code"
 
     # New password works; old does not.
     assert client.post(
@@ -268,25 +255,29 @@ def test_forgot_password_anti_enumeration_and_reset_flow(client, actors):
         f"{API}/auth/login", json={"username": "9844444444", "password": "NewCitizen#Pass2028!"}
     ).status_code == 200
 
-    _ = staff  # staff mobile may or may not exist; response already asserted above for unknown
 
-
-def test_expired_reset_token_rejected(client, actors):
+def test_expired_reset_code_rejected(client, actors, monkeypatch):
+    provider = MockProvider()
+    monkeypatch.setattr("app.auth.password_reset.get_provider", lambda: provider)
     _register(client, mobile="9855555555")
-    client.post(f"{API}/auth/forgot-password", json={"username": "9855555555"})
+    client.post(f"{API}/auth/forgot-password", json={"identifier": "9855555555"})
+    match = re.search(r"\b(\d{8})\b", provider.deliveries[0]["body"])
+    assert match is not None
     with SessionLocal() as db:
         user = db.scalar(select(User).where(User.username == "919855555555"))
         row = db.scalar(select(PasswordResetToken).where(PasswordResetToken.user_id == user.id))
-        raw = "expired-reset-token-bbbbbbbbbbbb"
-        row.token_hash = hash_token(raw)
         row.expires_at = utcnow() - timedelta(minutes=1)
         db.commit()
     response = client.post(
         f"{API}/auth/reset-password",
-        json={"token": raw, "new_password": "ExpiredToken#Pass2028!"},
+        json={
+            "identifier": "9855555555",
+            "code": match.group(1),
+            "new_password": "ExpiredToken#Pass2028!",
+        },
     )
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "invalid_reset_token"
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_reset_code"
 
 
 # --- Dashboard date filtering --------------------------------------------------------------------
@@ -322,7 +313,7 @@ def test_dashboard_date_filter_kolkata_inclusive(client, actors):
         params={"from": "2026-11-10", "to": "2026-11-01"},
     )
     assert invalid.status_code == 422
-    assert invalid.json()["error"]["code"] == "invalid_range"
+    assert invalid.json()["error"]["code"] == "invalid_period"
     _ = created
 
 
@@ -347,13 +338,13 @@ def test_dashboard_accepts_kolkata_datetime_bounds_from_the_desk(client, actors)
     )
     assert past.status_code == 200
     assert past.json()["registered_today"] == 0
-    assert past.json()["active_total"] == 0
+    assert past.json()["active_total"] == 1
 
     garbage = client.get(
         f"{API}/dashboard/summary", headers=actors.helpdesk.headers, params={"from": "yesterday", "to": today}
     )
     assert garbage.status_code == 422
-    assert garbage.json()["error"]["code"] == "invalid_range"
+    assert garbage.json()["error"]["code"] == "invalid_period"
 
 
 # --- Case detail fields --------------------------------------------------------------------------

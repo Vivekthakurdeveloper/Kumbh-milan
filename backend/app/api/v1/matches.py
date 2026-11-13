@@ -12,11 +12,11 @@ from app.schemas.common import Page, PageParams
 from app.schemas.faces import MatchDetail, MatchHistoryEvent, MatchPhotoUrl
 from app.schemas.workflow import MatchQueueItem
 from app.services import workflow as workflow_service
-from app.storage import ObjectStorage, get_storage
+from app.storage.media import MediaLinks, get_media_links
 
 router = APIRouter(prefix="/matches", tags=["Matches"])
 NOT_FOUND = {**AUTHED, **errors(404)}
-StorageDep = Annotated[ObjectStorage, Depends(get_storage)]
+MediaDep = Annotated[MediaLinks, Depends(get_media_links)]
 
 
 @router.get(
@@ -66,16 +66,22 @@ def get_match(match_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession) -
     "/{match_id}/photos/{side}",
     response_model=MatchPhotoUrl,
     responses=NOT_FOUND,
-    summary="Presigned URL for a candidate photograph on a match",
+    summary="Short-lived, browser-reachable URL for a candidate photograph on a match",
 )
 def get_match_photo(
     match_id: uuid.UUID,
     side: Literal["left", "right"],
     principal: CurrentPrincipal,
     db: DbSession,
-    storage: StorageDep,
+    media: MediaDep,
 ) -> MatchPhotoUrl:
-    return workflow_service.match_photo_url(db, storage, principal.user, match_id, side)
+    """
+    The `url` is built for the browser: on the object store's public host when S3_PUBLIC_ENDPOINT_URL is
+    configured, otherwise on this API (`/api/v1/media/{token}`). It is never an internal hostname. Use it
+    directly as `<img src>`; it expires after `expires_in` seconds, so fetch a new one rather than caching it.
+    The response carries no similarity score.
+    """
+    return workflow_service.match_photo_url(db, media, principal.user, match_id, side)
 
 
 @router.get(

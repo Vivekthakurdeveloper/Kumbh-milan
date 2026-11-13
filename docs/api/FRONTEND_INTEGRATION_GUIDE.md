@@ -469,7 +469,7 @@ Displaying images:
 1. `GET /cases/{id}/attachments` → show items with `downloadable: true`; for `QUARANTINED`/`SCANNING`, show "Scanning…" and poll the list briefly; for `REJECTED`/`SCAN_FAILED`, show "File unavailable".
 2. For each image, call `GET /cases/{id}/attachments/{attachment_id}` to get a URL valid for `expires_in` seconds (default 300) and set it as `<img src>`. Request URLs lazily (when the thumbnail enters the viewport); every call is audited.
 3. Do not cache URLs beyond `expires_in`. On an `<img>` `error` event, fetch a new URL once.
-4. The presigned URL points at the object store's public endpoint (`S3_PUBLIC_ENDPOINT_URL`). If the frontend sets a Content-Security-Policy, add that host to `img-src` and `media-src`.
+4. The URL is always on a host the browser can reach: the object store's public host (`S3_PUBLIC_ENDPOINT_URL`) or this API (`/api/v1/media/{token}`, no `Authorization` header needed). Treat it as opaque. If the frontend sets a Content-Security-Policy, allow the API origin and any store host in `img-src` and `media-src`. The same applies to `GET /matches/{id}/photos/{side}`; that response has no similarity score.
 
 Delete requires a JSON body: with `fetch` use `api(path, { method: "DELETE", body: { reason } })`; with axios use `axios.delete(url, { data: { reason } })`.
 

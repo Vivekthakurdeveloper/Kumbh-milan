@@ -54,6 +54,18 @@ Totals: 12 Ready, 8 Partial, 2 Blocked.
 | Missing APIs | Staff still use admin reset. PUBLIC citizens use `POST /auth/forgot-password` + `POST /auth/reset-password` (SMS delivery depends on notification provider). |
 | Readiness | **Ready** |
 
+## 2a. Forgot password (login page)
+
+| Aspect | Detail |
+|---|---|
+| Roles | None (signed out) |
+| APIs | `POST /auth/forgot-password` then `POST /auth/reset-password` (not the admin route `POST /users/{id}/reset-password`) |
+| Actions | Enter username, email, or mobile; enter the code and a new password; return to login |
+| Form fields | Step 1: `identifier`, optional `channel` (`EMAIL`/`SMS`). Step 2: `identifier`, `code` (digits, length from `code_length`), `new_password` |
+| UI states | Step 1 always shows the same "check your email or phone" screen after `202`. `503 password_reset_unavailable`: tell the user to ask an administrator. Step 2: `422 invalid_reset_code` (request a new code), `422 weak_password` (code still valid), `429`. After `204`, all sessions are revoked: go to login |
+| Missing APIs | None. SMS delivery needs a real provider; email works with `EMAIL_PROVIDER=smtp` |
+| Readiness | **Ready** |
+
 ## 2. App shell, profile, change password
 
 | Aspect | Detail |
@@ -72,7 +84,7 @@ Totals: 12 Ready, 8 Partial, 2 Blocked.
 | Aspect | Detail |
 |---|---|
 | Roles | All (counts are scoped to the caller's visibility) |
-| APIs | `GET /dashboard/summary`; drill-downs via `GET /cases` (e.g. `unassigned=true`, `urgency_level=CRITICAL`) |
+| APIs | `GET /dashboard/summary` (optional `from`/`to` for the Today / 7 days / 30 days selector; they change `urgent_active`, `unassigned_active`, `registered_today`, `pending_match_reviews`); drill-downs via `GET /cases` (e.g. `unassigned=true`, `urgency_level=CRITICAL`) |
 | Actions | View counts; click through to filtered lists |
 | Form fields | — |
 | Data deps | Default missing keys in `by_status` / `active_by_type` to 0 |

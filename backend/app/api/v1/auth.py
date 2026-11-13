@@ -1,18 +1,19 @@
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, BackgroundTasks, Request, status
 
 from app.api.v1.responses import AUTHED, errors
+from app.auth import mfa, password_reset
 from app.auth import service as auth_service
 from app.auth.dependencies import CurrentPrincipal, DbSession
 from app.auth.permissions import ROLE_PERMISSIONS
+from app.config import get_settings
 from app.models.enums import Role
 from app.schemas.admin import UserRead
-from app.auth import mfa
 from app.schemas.auth import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
+    ForgotPasswordResponse,
     LoginRequest,
     MeResponse,
-    MessageResponse,
     MfaConfirmRequest,
     MfaEnrollResponse,
     RefreshRequest,
@@ -59,33 +60,6 @@ def login(payload: LoginRequest, request: Request, db: DbSession) -> TokenRespon
     return _tokens(pair)
 
 
-@router.post(
-    "/forgot-password",
-    response_model=MessageResponse,
-    responses=errors(422, 429),
-    summary="Request a password reset token for a PUBLIC account",
-)
-def forgot_password(payload: ForgotPasswordRequest, db: DbSession) -> MessageResponse:
-    """
-    Always returns the same message whether or not the account exists.
-    When a PUBLIC account matches, a single-use reset token is stored as a hash and SMS delivery
-    is attempted through the configured notification provider. Delivery is a deployment dependency.
-    """
-    message = auth_service.request_password_reset(db, username=payload.username)
-    return MessageResponse(message=message)
-
-
-@router.post(
-    "/reset-password",
-    status_code=status.HTTP_204_NO_CONTENT,
-    responses=errors(401, 422, 429),
-    summary="Reset a PUBLIC account password with a one-time token",
-)
-def reset_password(payload: ResetPasswordRequest, db: DbSession) -> None:
-    """Validate the reset token, set a new password, and revoke every existing session."""
-    auth_service.reset_password(db, token=payload.token, new_password=payload.new_password)
-
-
 @router.post("/refresh", response_model=TokenResponse, responses=errors(401, 422))
 def refresh(payload: RefreshRequest, db: DbSession) -> TokenResponse:
     """Rotate the refresh token. Presenting an already-rotated token revokes the whole session."""
@@ -125,3 +99,44 @@ def change_password(payload: ChangePasswordRequest, principal: CurrentPrincipal,
     auth_service.change_password(
         db, user=principal.user, current_password=payload.current_password, new_password=payload.new_password
     )
+
+
+@router.post(
+    "/forgot-password",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=ForgotPasswordResponse,
+    responses=errors(422, 429, 503),
+)
+def forgot_password(
+    payload: ForgotPasswordRequest, background: BackgroundTasks, db: DbSession
+) -> ForgotPasswordResponse:
+    """
+    Email or text a one-time reset code. No sign-in needed. The answer is the same whether or not the account
+    exists, and the message is sent after the response, so neither content nor timing reveals which accounts
+    are real. Finish with POST /auth/reset-password. Returns 503 `password_reset_unavailable` only when the
+    deployment has neither email nor SMS delivery configured. Limited per IP and per account.
+    """
+    delivery = password_reset.request_reset(db, identifier=payload.identifier, requested_channel=payload.channel)
+    if delivery is not None:
+        background.add_task(password_reset.deliver, delivery)
+    settings = get_settings()
+    return ForgotPasswordResponse(
+        message="If an account matches, a reset code has been sent.",
+        code_length=settings.password_reset_code_length,
+        expires_in_minutes=settings.password_reset_ttl_minutes,
+    )
+
+
+@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT, responses=errors(422, 429))
+def reset_password(payload: ResetPasswordRequest, background: BackgroundTasks, db: DbSession) -> None:
+    """
+    Set a new password using the code from POST /auth/forgot-password. Every session is revoked, so sign in
+    again afterwards. A wrong, expired, or used code is `422 invalid_reset_code`; five wrong guesses burn the
+    code. A weak password is `422 weak_password` and does not use up the code. Not the admin route
+    POST /users/{id}/reset-password.
+    """
+    notice = password_reset.reset_password(
+        db, identifier=payload.identifier, code=payload.code, new_password=payload.new_password
+    )
+    if notice is not None:
+        background.add_task(password_reset.deliver, notice)

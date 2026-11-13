@@ -171,3 +171,15 @@ def test_auth_routes_fail_closed_when_redis_is_down():
         assert "Retry-After" in r.headers
         # Fail-open policies degrade to per-instance limits instead of taking the API down.
         assert c.get("/api/v1/ping").status_code == 200
+
+
+def test_forgot_and_reset_password_have_their_own_fail_closed_ip_limits():
+    from app.ratelimit.policies import build_rules, policies_for
+
+    rules, general = build_rules(_settings(rate_limit_forgot_password_per_hour=4, rate_limit_reset_password_per_hour=9))
+    forgot = policies_for(rules, general, "POST", "/api/v1/auth/forgot-password")[0]
+    reset = policies_for(rules, general, "POST", "/api/v1/auth/reset-password")[0]
+    assert (forgot.name, forgot.limit, forgot.window_seconds, forgot.key_by, forgot.fail_closed) == (
+        "forgot_password", 4, 3600, "ip", True,
+    )
+    assert (reset.name, reset.limit, reset.key_by, reset.fail_closed) == ("reset_password", 9, "ip", True)

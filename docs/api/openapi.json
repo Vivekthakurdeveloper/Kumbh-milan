@@ -172,113 +172,6 @@
         }
       }
     },
-    "/api/v1/auth/forgot-password": {
-      "post": {
-        "tags": [
-          "Authentication"
-        ],
-        "summary": "Request a password reset token for a PUBLIC account",
-        "description": "Always returns the same message whether or not the account exists.\nWhen a PUBLIC account matches, a single-use reset token is stored as a hash and SMS delivery\nis attempted through the configured notification provider. Delivery is a deployment dependency.",
-        "operationId": "forgot_password_api_v1_auth_forgot_password_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ForgotPasswordRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MessageResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Rate limited or temporarily locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/auth/reset-password": {
-      "post": {
-        "tags": [
-          "Authentication"
-        ],
-        "summary": "Reset a PUBLIC account password with a one-time token",
-        "description": "Validate the reset token, set a new password, and revoke every existing session.",
-        "operationId": "reset_password_api_v1_auth_reset_password_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResetPasswordRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "401": {
-            "description": "Missing, expired, or revoked credentials",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Rate limited or temporarily locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/auth/refresh": {
       "post": {
         "tags": [
@@ -572,6 +465,113 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/api/v1/auth/forgot-password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Forgot Password",
+        "description": "Email or text a one-time reset code. No sign-in needed. The answer is the same whether or not the account\nexists, and the message is sent after the response, so neither content nor timing reveals which accounts\nare real. Finish with POST /auth/reset-password. Returns 503 `password_reset_unavailable` only when the\ndeployment has neither email nor SMS delivery configured. Limited per IP and per account.",
+        "operationId": "forgot_password_api_v1_auth_forgot_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgotPasswordResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable or not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/reset-password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Reset Password",
+        "description": "Set a new password using the code from POST /auth/forgot-password. Every session is revoked, so sign in\nagain afterwards. A wrong, expired, or used code is `422 invalid_reset_code`; five wrong guesses burn the\ncode. A weak password is `422 weak_password` and does not use up the code. Not the admin route\nPOST /users/{id}/reset-password.",
+        "operationId": "reset_password_api_v1_auth_reset_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/stations": {
@@ -2582,7 +2582,7 @@
             }
           },
           "503": {
-            "description": "Service temporarily unavailable",
+            "description": "Temporarily unavailable or not configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -2691,7 +2691,7 @@
             }
           },
           "503": {
-            "description": "Service temporarily unavailable",
+            "description": "Temporarily unavailable or not configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -10390,7 +10390,8 @@
         "tags": [
           "Matches"
         ],
-        "summary": "Presigned URL for a candidate photograph on a match",
+        "summary": "Short-lived, browser-reachable URL for a candidate photograph on a match",
+        "description": "The `url` is built for the browser: on the object store's public host when S3_PUBLIC_ENDPOINT_URL is\nconfigured, otherwise on this API (`/api/v1/media/{token}`). It is never an internal hostname. Use it\ndirectly as `<img src>`; it expires after `expires_in` seconds, so fetch a new one rather than caching it.\nThe response carries no similarity score.",
         "operationId": "get_match_photo_api_v1_matches__match_id__photos__side__get",
         "security": [
           {
@@ -10571,6 +10572,97 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/media/{token}": {
+      "get": {
+        "tags": [
+          "Media"
+        ],
+        "summary": "Fetch a file through a short-lived signed link",
+        "description": "No Authorization header is needed, so the URL can be used directly as an `<img src>` or `<audio src>`.\nLinks come from GET /matches/{id}/photos/{side} and GET /cases/{id}/attachments/{aid}, last\nS3_PRESIGN_TTL_SECONDS (default 300), and stop working when the user's sessions are revoked.",
+        "operationId": "get_media_api_v1_media__token__get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {}
+            }
+          },
+          "206": {
+            "description": "Part of the file"
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The link has expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Requested range is not satisfiable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -12296,7 +12388,7 @@
           "Dashboard"
         ],
         "summary": "Counts for the console home screen",
-        "description": "Without `from`/`to`, behaviour is unchanged: active/status counts are point-in-time and\n`registered_today` means since Asia/Kolkata midnight.\n\nWith both parameters, case-created bounds filter the dashboard metrics (end date inclusive).",
+        "description": "Pass `from` and `to` for the Today / 7 days / 30 days selector: urgent_active, unassigned_active,\nregistered_today and pending_match_reviews then count only cases registered (and matches proposed) inside the\nwindow. Today is `from=<today>&to=<today>`; 7 days is `from=<today-6>&to=<today>`. Either bound may be\nomitted; the window may not exceed 366 days. Without either, the original all-time behaviour is unchanged.",
         "operationId": "summary_api_v1_dashboard_summary_get",
         "security": [
           {
@@ -12312,16 +12404,20 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "format": "date"
+                  "maxLength": 40
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Inclusive Asia/Kolkata calendar start date (YYYY-MM-DD)",
+              "description": "Start of the reporting window (inclusive). ISO 8601 date (whole Asia/Kolkata day) or datetime; a datetime without an offset is Asia/Kolkata time.",
+              "examples": [
+                "2026-11-06",
+                "2026-11-06T00:00:00+05:30"
+              ],
               "title": "From"
             },
-            "description": "Inclusive Asia/Kolkata calendar start date (YYYY-MM-DD)"
+            "description": "Start of the reporting window (inclusive). ISO 8601 date (whole Asia/Kolkata day) or datetime; a datetime without an offset is Asia/Kolkata time."
           },
           {
             "name": "to",
@@ -12331,16 +12427,20 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "format": "date"
+                  "maxLength": 40
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Inclusive Asia/Kolkata calendar end date (YYYY-MM-DD)",
+              "description": "End of the reporting window (inclusive). A date means the end of that Asia/Kolkata day.",
+              "examples": [
+                "2026-11-06",
+                "2026-11-06T18:00:00+05:30"
+              ],
               "title": "To"
             },
-            "description": "Inclusive Asia/Kolkata calendar end date (YYYY-MM-DD)"
+            "description": "End of the reporting window (inclusive). A date means the end of that Asia/Kolkata day."
           }
         ],
         "responses": {
@@ -13522,6 +13622,32 @@
             "format": "date-time",
             "title": "Generated At"
           },
+          "period_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period From",
+            "description": "Start of the applied window; null when no window was requested"
+          },
+          "period_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period To",
+            "description": "End of the applied window; null when open-ended or not requested"
+          },
           "active_by_type": {
             "additionalProperties": {
               "type": "integer"
@@ -13544,21 +13670,22 @@
           "urgent_active": {
             "type": "integer",
             "title": "Urgent Active",
-            "description": "Active cases with CRITICAL or HIGH urgency"
+            "description": "Active cases with CRITICAL or HIGH urgency; with a window, only those registered in it"
           },
           "unassigned_active": {
             "type": "integer",
-            "title": "Unassigned Active"
+            "title": "Unassigned Active",
+            "description": "Active unassigned cases; with a window, only those registered in it"
           },
           "registered_today": {
             "type": "integer",
             "title": "Registered Today",
-            "description": "Since midnight Asia/Kolkata"
+            "description": "Cases registered since midnight Asia/Kolkata; with a window, cases registered inside it"
           },
           "pending_match_reviews": {
             "type": "integer",
             "title": "Pending Match Reviews",
-            "description": "PROPOSED matches (manual or automatic) touching visible cases"
+            "description": "PROPOSED matches (manual or automatic) touching visible cases; with a window, proposed inside it"
           },
           "attachments_awaiting_scan": {
             "type": "integer",
@@ -13583,7 +13710,7 @@
           "notifications_failed"
         ],
         "title": "DashboardSummary",
-        "description": "Counts cover only cases the caller may see, excluding archived cases."
+        "description": "Counts cover only cases the caller may see, excluding archived cases.\n\nWith `from` and/or `to`, urgent_active, unassigned_active, registered_today and pending_match_reviews are\nlimited to cases registered (and matches proposed) inside that window; period_from and period_to echo it."
       },
       "ErrorBody": {
         "properties": {
@@ -13641,21 +13768,63 @@
       },
       "ForgotPasswordRequest": {
         "properties": {
-          "username": {
+          "identifier": {
             "type": "string",
-            "maxLength": 15,
-            "minLength": 10,
-            "pattern": "^[0-9]+$",
-            "title": "Username",
-            "description": "Registered mobile number"
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Identifier",
+            "description": "Username, email address, or mobile number on the account"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "EMAIL",
+                  "SMS"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel",
+            "description": "Where to send the code. Omit to use the one matching the identifier: an email address gets email, a mobile number gets SMS, and a username gets email, or SMS when the account has no email."
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "username"
+          "identifier"
         ],
         "title": "ForgotPasswordRequest"
+      },
+      "ForgotPasswordResponse": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Always the same text, whether or not an account matched, so accounts cannot be discovered"
+          },
+          "code_length": {
+            "type": "integer",
+            "title": "Code Length",
+            "description": "Digits in the code the user will receive"
+          },
+          "expires_in_minutes": {
+            "type": "integer",
+            "title": "Expires In Minutes",
+            "description": "How long the code stays valid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message",
+          "code_length",
+          "expires_in_minutes"
+        ],
+        "title": "ForgotPasswordResponse"
       },
       "FoundItemCaseRead": {
         "properties": {
@@ -13788,7 +13957,7 @@
           "in_scope": {
             "type": "boolean",
             "title": "In Scope",
-            "description": "True when the case belongs to the caller's operational station scope (or is owned by a PUBLIC reporter)"
+            "description": "Same meaning as on the case list: false marks a case the caller may see only as a read-only summary. A case outside the caller's scope is never returned by this endpoint (it is a 404), so a 200 always carries true; clients should still key read-only behaviour off this field."
           },
           "verification_evidence": {
             "anyOf": [
@@ -14560,7 +14729,7 @@
           "in_scope": {
             "type": "boolean",
             "title": "In Scope",
-            "description": "True when the case belongs to the caller's operational station scope (or is owned by a PUBLIC reporter)"
+            "description": "Same meaning as on the case list: false marks a case the caller may see only as a read-only summary. A case outside the caller's scope is never returned by this endpoint (it is a 404), so a 200 always carries true; clients should still key read-only behaviour off this field."
           },
           "verification_evidence": {
             "anyOf": [
@@ -15626,7 +15795,7 @@
             ],
             "title": "Name Local",
             "examples": [
-              "\u0939\u0930 \u0915\u0940 \u092a\u094c\u0921\u093c\u0940"
+              "हर की पौड़ी"
             ]
           },
           "sector_id": {
@@ -16033,7 +16202,7 @@
           "in_scope": {
             "type": "boolean",
             "title": "In Scope",
-            "description": "True when the case belongs to the caller's operational station scope (or is owned by a PUBLIC reporter)"
+            "description": "Same meaning as on the case list: false marks a case the caller may see only as a read-only summary. A case outside the caller's scope is never returned by this endpoint (it is a 404), so a 200 always carries true; clients should still key read-only behaviour off this field."
           },
           "verification_evidence": {
             "anyOf": [
@@ -17951,20 +18120,6 @@
         ],
         "title": "MediaType"
       },
-      "MessageResponse": {
-        "properties": {
-          "message": {
-            "type": "string",
-            "title": "Message"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "message"
-        ],
-        "title": "MessageResponse"
-      },
       "MfaConfirmRequest": {
         "properties": {
           "code": {
@@ -18137,7 +18292,7 @@
           "in_scope": {
             "type": "boolean",
             "title": "In Scope",
-            "description": "True when the case belongs to the caller's operational station scope (or is owned by a PUBLIC reporter)"
+            "description": "Same meaning as on the case list: false marks a case the caller may see only as a read-only summary. A case outside the caller's scope is never returned by this endpoint (it is a 404), so a 200 always carries true; clients should still key read-only behaviour off this field."
           },
           "verification_evidence": {
             "anyOf": [
@@ -19536,6 +19691,13 @@
             "type": "string",
             "title": "Full Name"
           },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
           "police_badge_number": {
             "anyOf": [
               {
@@ -19564,10 +19726,13 @@
         "required": [
           "id",
           "full_name",
+          "username",
+          "role",
           "police_badge_number",
           "station_id"
         ],
-        "title": "OfficerSummary"
+        "title": "OfficerSummary",
+        "description": "One row of GET /users/assignable-officers (police and admins only). No contact fields."
       },
       "OtpPurpose": {
         "type": "string",
@@ -20614,11 +20779,18 @@
       },
       "ResetPasswordRequest": {
         "properties": {
-          "token": {
+          "identifier": {
             "type": "string",
-            "maxLength": 256,
-            "minLength": 20,
-            "title": "Token"
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Identifier",
+            "description": "The same username, email, or mobile number used to request the code"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6,12}$",
+            "title": "Code",
+            "description": "The one-time code from the email or SMS"
           },
           "new_password": {
             "type": "string",
@@ -20630,7 +20802,8 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "token",
+          "identifier",
+          "code",
           "new_password"
         ],
         "title": "ResetPasswordRequest"
