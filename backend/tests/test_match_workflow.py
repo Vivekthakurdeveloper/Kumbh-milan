@@ -308,3 +308,18 @@ def test_stale_patch_is_rejected(client, actors):
     assert client.patch(url, json={"language": "Hindi", "expected_version": 1}, headers=actors.helpdesk.headers).status_code == 200
     stale = client.patch(url, json={"language": "Awadhi", "expected_version": 1}, headers=actors.helpdesk.headers)
     assert stale.status_code == 409 and stale.json()["error"]["code"] == "case_changed"
+
+
+def test_match_history_lists_each_event_once_while_both_case_trails_keep_it(client, actors):
+    mp, fp = _person_pair(client, actors)
+    match = _propose(client, actors.police, mp["id"], fp["id"])
+    assert _review(client, actors.police2, mp["id"], match["id"]).status_code == 200
+
+    history = client.get(f"{API}/matches/{match['id']}/history", headers=actors.police.headers)
+    assert history.status_code == 200, history.text
+    assert [e["action"] for e in history.json()] == ["MATCH_PROPOSED", "MATCH_REVIEWED"]
+
+    # Storage is unchanged: the audit log still holds one MATCH_REVIEWED row per case.
+    audit = client.get(f"{API}/audit-events", params={"action": "MATCH_REVIEWED"}, headers=actors.admin.headers).json()
+    assert audit["total"] == 2
+    assert {e["case_id"] for e in audit["items"]} == {mp["id"], fp["id"]}

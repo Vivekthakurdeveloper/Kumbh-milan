@@ -1025,17 +1025,26 @@ def match_history(db: Session, actor: User, match_id: uuid.UUID):
             .order_by(AuditEvent.created_at, AuditEvent.id)
         )
     )
-    return [
-        MatchHistoryEvent(
-            id=row.id,
-            action=row.action,
-            actor_user_id=row.actor_user_id,
-            after_state=row.after_state,
-            reason=row.reason,
-            created_at=row.created_at,
+    # Each match event is audited once per case so both case trails are complete. Rows written in the
+    # same transaction share created_at, so keep one per (action, actor, time, reason).
+    seen: set[tuple] = set()
+    events = []
+    for row in rows:
+        key = (row.action, row.actor_user_id, row.created_at, row.reason)
+        if key in seen:
+            continue
+        seen.add(key)
+        events.append(
+            MatchHistoryEvent(
+                id=row.id,
+                action=row.action,
+                actor_user_id=row.actor_user_id,
+                after_state=row.after_state,
+                reason=row.reason,
+                created_at=row.created_at,
+            )
         )
-        for row in rows
-    ]
+    return events
 
 
 # --- Audit ---------------------------------------------------------------------------------------
