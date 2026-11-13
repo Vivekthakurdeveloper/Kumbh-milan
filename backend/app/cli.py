@@ -73,7 +73,7 @@ def purge_expired(args: argparse.Namespace) -> int:
         db.commit()
     print(
         f"Purged {keys} idempotency keys, {attempts} login attempts, {sessions} expired sessions, "
-        f"{otps} OTP challenges, {resets} password reset tokens"
+        f"{otps} OTP challenges, {resets} password reset codes"
     )
     return 0
 

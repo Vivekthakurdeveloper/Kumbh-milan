@@ -1,5 +1,4 @@
 import hmac
-import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -21,14 +20,12 @@ from app.common.context import client_ip_var
 from app.common.errors import Conflict, TooManyRequests, Unauthenticated, ValidationFailed
 from app.common.time import utcnow
 from app.config import get_settings
-from app.models import LoginAttempt, PasswordResetToken, RefreshToken, User
-from app.models.enums import NotificationChannel, NotificationTemplate, Role
-from app.notifications import ProviderError, get_provider, mask, normalise_phone, render
+from app.models import LoginAttempt, RefreshToken, User
+from app.models.enums import Role
+from app.notifications import normalise_phone
 from app.observability.metrics import AUTH_FAILURES
 
 INVALID_CREDENTIALS = "Invalid username or password"
-FORGOT_PASSWORD_MESSAGE = "If an account exists, password reset instructions will be sent."
-INVALID_RESET_TOKEN = "Invalid or expired password reset token"
 
 
 @dataclass(frozen=True)
@@ -260,124 +257,3 @@ def register_public_user(
     )
     db.commit()
     return pair
-
-
-def request_password_reset(db: Session, *, username: str) -> str:
-    """
-    Always returns the same acknowledgement. A reset token is created and SMS attempted only for
-    active PUBLIC accounts. Delivery depends on the configured notification provider/templates.
-    """
-    settings = get_settings()
-    try:
-        mobile, e164 = _canonical_mobile_username(username)
-    except ValidationFailed:
-        # Same response for malformed/unknown identifiers so this endpoint cannot enumerate accounts.
-        return FORGOT_PASSWORD_MESSAGE
-
-    user = db.scalar(select(User).where(User.username == mobile, User.is_active.is_(True)))
-    if user is not None and Role(user.role) is Role.PUBLIC:
-        # Invalidate outstanding unused tokens for this user.
-        db.execute(
-            update(PasswordResetToken)
-            .where(
-                PasswordResetToken.user_id == user.id,
-                PasswordResetToken.consumed_at.is_(None),
-            )
-            .values(consumed_at=utcnow())
-        )
-        raw_token = secrets.token_urlsafe(32)
-        reset = PasswordResetToken(
-            id=uuid.uuid4(),
-            user_id=user.id,
-            token_hash=hash_token(raw_token),
-            expires_at=utcnow() + timedelta(minutes=settings.password_reset_token_ttl_minutes),
-            client_ip=client_ip_var.get(),
-        )
-        db.add(reset)
-        record_audit(
-            db,
-            action=AuditAction.PASSWORD_RESET_REQUESTED,
-            entity_type="user",
-            entity_id=user.id,
-            actor_user_id=None,
-            after={"recipient": mask(user.phone_number or e164)},
-        )
-        db.commit()
-
-        phone = user.phone_number or e164
-        body = render(
-            NotificationTemplate.PASSWORD_RESET,
-            "en",
-            otp=raw_token,
-            case_number="",
-            station="",
-        )
-        provider = get_provider()
-        if provider.enabled:
-            try:
-                provider.send(
-                    channel=NotificationChannel.SMS,
-                    to=phone if phone.startswith("+") else f"+{phone}",
-                    body=body,
-                    idempotency_key=str(reset.id),
-                    template=NotificationTemplate.PASSWORD_RESET,
-                    locale="en",
-                    extras={"otp": raw_token},
-                )
-            except ProviderError:
-                # Token remains valid; delivery failure is not an enumeration signal.
-                pass
-        del raw_token
-    else:
-        record_audit(
-            db,
-            action=AuditAction.PASSWORD_RESET_REQUESTED,
-            entity_type="user",
-            actor_user_id=None,
-            after={},
-        )
-        db.commit()
-
-    return FORGOT_PASSWORD_MESSAGE
-
-
-def reset_password(db: Session, *, token: str, new_password: str) -> None:
-    presented = hash_token(token.strip())
-    reset = db.scalar(
-        select(PasswordResetToken)
-        .where(
-            PasswordResetToken.token_hash == presented,
-            PasswordResetToken.consumed_at.is_(None),
-        )
-        .with_for_update()
-    )
-    if reset is None or reset.expires_at <= utcnow():
-        raise Unauthenticated(INVALID_RESET_TOKEN, code="invalid_reset_token")
-
-    user = db.get(User, reset.user_id, with_for_update=True)
-    if user is None or not user.is_active or Role(user.role) is not Role.PUBLIC:
-        raise Unauthenticated(INVALID_RESET_TOKEN, code="invalid_reset_token")
-
-    validate_new_password(new_password, username=user.username)
-    user.password_hash = hash_password(new_password)
-    reset.consumed_at = utcnow()
-    # Consume any other outstanding tokens for this user.
-    db.execute(
-        update(PasswordResetToken)
-        .where(
-            PasswordResetToken.user_id == user.id,
-            PasswordResetToken.consumed_at.is_(None),
-            PasswordResetToken.id != reset.id,
-        )
-        .values(consumed_at=utcnow())
-    )
-    revoke_all_sessions(db, user, "password_reset")
-    record_audit(
-        db,
-        action=AuditAction.PASSWORD_RESET_COMPLETED,
-        entity_type="user",
-        entity_id=user.id,
-        actor_user_id=user.id,
-        after={"source": "self_service"},
-    )
-    db.commit()

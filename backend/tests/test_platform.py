@@ -18,15 +18,17 @@ def test_openapi_documents_every_operation(client):
         assert "post" in paths[f"{API}/cases/{kind}/{{case_id}}/assign"]
         assert "post" in paths[f"{API}/cases/{kind}/{{case_id}}/status"]
     public_prefixes = (f"{API}/public/", f"{API}/devices/")
+    # Credentials-by-body or credentials-in-path endpoints: the token or code is the credential.
+    public = {
+        f"{API}/auth/login",
+        f"{API}/auth/refresh",
+        f"{API}/auth/register",
+        f"{API}/auth/forgot-password",
+        f"{API}/auth/reset-password",
+        f"{API}/media/{{token}}",
+    }
     for path, ops in paths.items():
-        unauthenticated = {
-            f"{API}/auth/login",
-            f"{API}/auth/refresh",
-            f"{API}/auth/register",
-            f"{API}/auth/forgot-password",
-            f"{API}/auth/reset-password",
-        }
-        if not path.startswith(API) or path in unauthenticated:
+        if not path.startswith(API) or path in public:
             continue
         if any(path.startswith(prefix) for prefix in public_prefixes):
             continue

@@ -93,6 +93,7 @@ Interactive docs live at `/docs` and the schema at `/openapi.json` (both disable
 | Health | `GET /health` (liveness), `GET /ready` (database + object storage) |
 | Auth | `POST /api/v1/auth/login`, `/refresh`, `/logout`, `/change-password`; `GET /api/v1/auth/me` |
 | Stations | `GET /stations`; `POST /stations`, `PATCH /stations/{id}` (admin) |
+| Account recovery | `POST /auth/forgot-password`, `POST /auth/reset-password` (emailed or texted one-time code) |
 | Users | `GET /users/assignable-officers`; `GET/POST /users`, `GET/PATCH /users/{id}`, `POST /users/{id}/reset-password` (admin) |
 | Per-type cases | for `missing-persons`, `found-persons`, `lost-items`, `found-items`: `POST` and `GET /cases/{type}`; `GET` and `PATCH /cases/{type}/{id}`; `POST /cases/{type}/{id}/assign`; `POST /cases/{type}/{id}/status` |
 | Custody | `POST /cases/found-items/{id}/custody` |
@@ -215,7 +216,7 @@ KUMBH_ADMIN_PASSWORD='…' docker compose run --rm -e KUMBH_ADMIN_PASSWORD api \
 open http://localhost:8000/docs
 ```
 
-Locally the object store is SeaweedFS (S3 API on `:8333`, volume data encrypted). Any S3-compatible service works: set `S3_ENDPOINT_URL` (leave it empty for AWS S3), `S3_SERVER_SIDE_ENCRYPTION=AES256` or `aws:kms`, and `S3_PUBLIC_ENDPOINT_URL` when clients reach storage on a different hostname than the API does.
+Locally the object store is SeaweedFS (S3 API on `:8333`, volume data encrypted). Any S3-compatible service works: set `S3_ENDPOINT_URL` (leave it empty for AWS S3), `S3_SERVER_SIDE_ENCRYPTION=AES256` or `aws:kms`, and `S3_PUBLIC_ENDPOINT_URL` only when browsers can reach the store directly (CDN or public hostname). With a custom `S3_ENDPOINT_URL` and no public host, photo and download links are served by the API itself at `/api/v1/media/{token}`, so officers never need access to the object store's port; set `API_PUBLIC_BASE_URL` to the API's public origin behind a reverse proxy (required in staging and production).
 
 To run the API from source instead of the container:
 
@@ -293,7 +294,8 @@ Media: enable bucket versioning and replication to a second region or site, or s
 |---|---|
 | `permission denied for table …` | A new table is missing grants for the app role, or the API is running as the wrong role. |
 | `/ready` reports `object_storage: error` | Wrong S3 endpoint or credentials, or the bucket is missing (run `python -m app.cli ensure-bucket`). |
-| Presigned URLs fail from the browser | `S3_PUBLIC_ENDPOINT_URL` is unset, or the bucket CORS does not allow the console origin. |
+| Photo links point at `localhost:8333` or an internal host | An old build or an explicit `S3_PUBLIC_ENDPOINT_URL=http://localhost:8333`. Clear it; links then come from the API (`/api/v1/media/…`). Behind a proxy also set `API_PUBLIC_BASE_URL`. A real public store host also needs bucket CORS for the console origin. |
+| `POST /auth/forgot-password` returns `503 password_reset_unavailable` | `EMAIL_PROVIDER` is `disabled` and no SMS provider is configured. Use `EMAIL_PROVIDER=smtp` (set `SMTP_*`), or `console` locally (the code is logged). |
 | `Append-only table … cannot be modified` | Expected: notes, history, and audit records cannot be edited. Add a correction note instead. |
 | Tests refuse to run | `TEST_DATABASE_URL` must point at a database whose name ends in `_test`. |
 

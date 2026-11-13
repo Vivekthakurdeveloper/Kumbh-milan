@@ -7,8 +7,17 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PLACEHOLDER_MARKERS = ("change-me", "changeme", "placeholder", "example")
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 _INTERNAL_HOST_MARKERS = ("objectstore", ".internal", ".local", "host.docker.internal")
+
+
+def _is_browser_unreachable_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return (
+        host in _LOOPBACK_HOSTS
+        or host.endswith(".localhost")
+        or any(marker in host for marker in _INTERNAL_HOST_MARKERS)
+    )
 
 
 class Settings(BaseSettings):
@@ -74,6 +83,21 @@ class Settings(BaseSettings):
     s3_secret_access_key: str | None = None
     s3_server_side_encryption: str = ""
     s3_presign_ttl_seconds: int = 300
+    media_delivery: Literal["auto", "presigned", "proxy"] = Field(
+        "auto",
+        description=(
+            "How browsers fetch private photos and recordings. presigned: direct links to the object store (needs a "
+            "host the browser can reach). proxy: short-lived links served by this API. auto: presigned when "
+            "S3_PUBLIC_ENDPOINT_URL is set or the store is AWS S3 (no S3_ENDPOINT_URL), otherwise proxy."
+        ),
+    )
+    api_public_base_url: str | None = Field(
+        None,
+        description=(
+            "Public origin of this API (https://api.example.org), used to build proxy media links. "
+            "Falls back to the origin of the incoming request, which is wrong behind a reverse proxy."
+        ),
+    )
 
     max_photo_bytes: int = 10 * 1024 * 1024
     max_audio_bytes: int = 25 * 1024 * 1024
@@ -131,7 +155,10 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     smtp_from_email: str | None = None
     smtp_from_name: str = "Kumbh Setu"
-    smtp_timeout_seconds: float = 15.0
+    smtp_security: Literal["starttls", "ssl", "none"] = Field(
+        "starttls", description="none is only for a local relay such as MailHog"
+    )
+    smtp_timeout_seconds: float = 10.0
 
     fcm_enabled: bool = False
     fcm_credentials_json: str | None = Field(
@@ -186,19 +213,39 @@ class Settings(BaseSettings):
     rate_limit_public_otp_per_minute: int = 10
     rate_limit_public_submit_per_minute: int = 20
     rate_limit_public_status_per_minute: int = 30
-    password_reset_token_ttl_minutes: int = Field(30, ge=5, le=120)
     workers_required: bool = Field(
         False,
         description="When true, readiness fails unless scan, notification, cleanup, and retention workers have fresh heartbeats.",
     )
     worker_heartbeat_max_age_seconds: int = 180
+    password_reset_code_length: int = Field(8, ge=6, le=12, description="Digits in the emailed or texted reset code")
+    password_reset_ttl_minutes: int = Field(15, ge=5, le=60)
+    password_reset_max_attempts: int = Field(5, ge=1, le=10, description="Wrong codes before a reset code is burned")
+    password_reset_max_requests_per_hour: int = Field(
+        3, ge=1, le=20, description="Codes sent per account per hour; further requests are accepted but not sent"
+    )
+    email_provider: Literal["disabled", "console", "mock", "smtp"] = Field(
+        "disabled",
+        description="smtp sends real email. console or mock are local only. disabled turns email delivery off.",
+    )
+    email_from: str = Field("Kumbh Setu <no-reply@localhost>", description="From header for outgoing email")
     mfa_mode: Literal["disabled", "totp"] = Field(
         "disabled",
         description="totp is an optional step-up factor. It is not phishing-resistant and is not a production approval.",
     )
 
+    @property
+    def media_mode(self) -> Literal["presigned", "proxy"]:
+        if self.media_delivery != "auto":
+            return self.media_delivery
+        if self.s3_public_endpoint_url or not self.s3_endpoint_url:
+            return "presigned"
+        return "proxy"
+
     @model_validator(mode="after")
     def _validate_production_secrets(self) -> "Settings":
+        if self.email_provider == "smtp" and not self.smtp_host:
+            raise ValueError("EMAIL_PROVIDER=smtp requires SMTP_HOST")
         if self.scan_mode is None:
             self.scan_mode = "clamav" if self.clamav_host else "disabled"
         if self.scan_mode == "clamav" and not self.clamav_host:
@@ -236,35 +283,36 @@ class Settings(BaseSettings):
                 raise ValueError("METRICS_TOKEN (24+ characters) is required to protect /metrics")
             if "*" in self.cors_origins:
                 raise ValueError("CORS_ORIGINS must list explicit origins outside local development")
-            self._require_browser_reachable_s3_public_endpoint()
+            if self.email_provider in ("console", "mock"):
+                raise ValueError("EMAIL_PROVIDER must be smtp or disabled outside local and test")
+            if self.media_mode == "presigned":
+                if self.s3_endpoint_url and not self.s3_public_endpoint_url:
+                    raise ValueError("MEDIA_DELIVERY=presigned with S3_ENDPOINT_URL requires S3_PUBLIC_ENDPOINT_URL")
+                if self.s3_public_endpoint_url:
+                    self._require_browser_reachable_url(
+                        self.s3_public_endpoint_url, setting="S3_PUBLIC_ENDPOINT_URL"
+                    )
+            if self.media_mode == "proxy" and not self.api_public_base_url:
+                raise ValueError(
+                    "API_PUBLIC_BASE_URL is required when media links are served by the API "
+                    "(MEDIA_DELIVERY=proxy, or S3_ENDPOINT_URL set without S3_PUBLIC_ENDPOINT_URL)"
+                )
+            if self.api_public_base_url:
+                self._require_browser_reachable_url(self.api_public_base_url, setting="API_PUBLIC_BASE_URL")
         return self
 
-    def _require_browser_reachable_s3_public_endpoint(self) -> None:
-        """
-        Presigned photo URLs embed S3_PUBLIC_ENDPOINT_URL (or fall back to S3_ENDPOINT_URL).
-        Outside local/test the signed host must be an explicit HTTP(S) URL that browsers can reach —
-        never a loopback or docker-internal hostname.
-        """
-        public = (self.s3_public_endpoint_url or "").strip()
-        if not public:
-            # Empty public endpoint is only valid when using real AWS (no custom endpoint_url).
-            if self.s3_endpoint_url:
-                raise ValueError(
-                    "S3_PUBLIC_ENDPOINT_URL is required when S3_ENDPOINT_URL is set so browsers "
-                    "never receive internal/localhost object-store addresses"
-                )
-            return
-        parsed = urlparse(public)
+    def _require_browser_reachable_url(self, value: str, *, setting: str) -> None:
+        """Validate a browser-facing media URL outside local and test environments."""
+        parsed = urlparse(value.strip())
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
-            raise ValueError("S3_PUBLIC_ENDPOINT_URL must be an absolute http(s) URL")
-        host = parsed.hostname.lower()
-        if host in _LOOPBACK_HOSTS or any(marker in host for marker in _INTERNAL_HOST_MARKERS):
+            raise ValueError(f"{setting} must be an absolute http(s) URL")
+        if _is_browser_unreachable_url(value):
             raise ValueError(
-                "S3_PUBLIC_ENDPOINT_URL must be a browser-reachable hostname "
+                f"{setting} must be a browser-reachable hostname "
                 "(not localhost, loopback, or docker-internal names)"
             )
         if self.app_env == "production" and parsed.scheme != "https":
-            raise ValueError("S3_PUBLIC_ENDPOINT_URL must use https in production")
+            raise ValueError(f"{setting} must use https in production")
 
 
 @lru_cache

@@ -44,6 +44,11 @@ class InvalidTransition(Conflict):
     code = "invalid_status_transition"
 
 
+class Gone(AppError):
+    status_code = 410
+    code = "gone"
+
+
 class PayloadTooLarge(AppError):
     status_code = 413
     code = "payload_too_large"
@@ -52,6 +57,11 @@ class PayloadTooLarge(AppError):
 class UnsupportedMedia(AppError):
     status_code = 415
     code = "unsupported_media_type"
+
+
+class RangeNotSatisfiable(AppError):
+    status_code = 416
+    code = "range_not_satisfiable"
 
 
 class TooManyRequests(AppError):
