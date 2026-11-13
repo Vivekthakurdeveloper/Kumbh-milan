@@ -15,7 +15,7 @@ target_metadata = Base.metadata
 
 
 # Tables owned by the PostGIS extension, not by this application.
-EXTENSION_TABLES = frozenset({"spatial_ref_sys"})
+EXTENSION_TABLES = frozenset({"spatial_ref_sys", "pagc_gaz", "pagc_lex", "pagc_rules"})
 
 
 def include_object(obj, name, type_, reflected, compare_to) -> bool:
