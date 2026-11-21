@@ -54,7 +54,7 @@
           "Authentication"
         ],
         "summary": "Register a PUBLIC citizen account",
-        "description": "Self-register with a mobile number as username. Role is always PUBLIC and cannot be chosen.\nReturns the same token structure as login.",
+        "description": "Self-register with the same exact 10-digit mobile in username and phone_number. Role is always PUBLIC\nand cannot be chosen. All supplied profile fields are persisted and the existing login token pair is returned.",
         "operationId": "register_api_v1_auth_register_post",
         "requestBody": {
           "content": {
@@ -10391,7 +10391,7 @@
           "Matches"
         ],
         "summary": "Short-lived, browser-reachable URL for a candidate photograph on a match",
-        "description": "The `url` is built for the browser: on the object store's public host when S3_PUBLIC_ENDPOINT_URL is\nconfigured, otherwise on this API (`/api/v1/media/{token}`). It is never an internal hostname. Use it\ndirectly as `<img src>`; it expires after `expires_in` seconds, so fetch a new one rather than caching it.\nThe response carries no similarity score.",
+        "description": "The `url` is built for the browser: on the object store's public host when S3_PUBLIC_ENDPOINT_URL is\nconfigured, otherwise on this API (`/api/v1/media/{token}`). It is never an internal hostname. Use it\ndirectly as `<img src>`; match-photo links expire after exactly 300 seconds, so fetch a new one rather\nthan caching it.\nThe response carries no similarity score.",
         "operationId": "get_match_photo_api_v1_matches__match_id__photos__side__get",
         "security": [
           {
@@ -13723,14 +13723,7 @@
             "title": "Message"
           },
           "request_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
             "title": "Request Id"
           },
           "details": {
@@ -13740,7 +13733,9 @@
         "type": "object",
         "required": [
           "code",
-          "message"
+          "message",
+          "request_id",
+          "details"
         ],
         "title": "ErrorBody"
       },
@@ -17212,6 +17207,10 @@
         "properties": {
           "side": {
             "type": "string",
+            "enum": [
+              "left",
+              "right"
+            ],
             "title": "Side"
           },
           "attachment_id": {
@@ -17225,6 +17224,7 @@
           },
           "expires_in": {
             "type": "integer",
+            "const": 300,
             "title": "Expires In"
           },
           "content_type": {
@@ -18008,6 +18008,39 @@
             "type": "string",
             "title": "Full Name"
           },
+          "first_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Name"
+          },
+          "middle_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Middle Name"
+          },
+          "last_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Name"
+          },
           "username": {
             "type": "string",
             "title": "Username"
@@ -18033,6 +18066,17 @@
               }
             ],
             "title": "Phone Number"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
           },
           "role": {
             "$ref": "#/components/schemas/Role"
@@ -18098,9 +18142,13 @@
         "required": [
           "id",
           "full_name",
+          "first_name",
+          "middle_name",
+          "last_name",
           "username",
           "email",
           "phone_number",
+          "address",
           "role",
           "police_badge_number",
           "station_id",
@@ -20748,16 +20796,16 @@
         "properties": {
           "username": {
             "type": "string",
-            "maxLength": 15,
+            "maxLength": 10,
             "minLength": 10,
-            "pattern": "^[0-9]+$",
+            "pattern": "^[0-9]{10}$",
             "title": "Username",
             "description": "Citizen mobile number used as the login username"
           },
           "password": {
             "type": "string",
             "maxLength": 128,
-            "minLength": 1,
+            "minLength": 8,
             "title": "Password"
           },
           "full_name": {
@@ -20765,6 +20813,61 @@
             "maxLength": 200,
             "minLength": 2,
             "title": "Full Name"
+          },
+          "first_name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "First Name"
+          },
+          "middle_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Middle Name"
+          },
+          "last_name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Last Name"
+          },
+          "phone_number": {
+            "type": "string",
+            "maxLength": 10,
+            "minLength": 10,
+            "pattern": "^[0-9]{10}$",
+            "title": "Phone Number"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
           }
         },
         "additionalProperties": false,
@@ -20772,7 +20875,10 @@
         "required": [
           "username",
           "password",
-          "full_name"
+          "full_name",
+          "first_name",
+          "last_name",
+          "phone_number"
         ],
         "title": "RegisterRequest",
         "description": "Citizen self-registration. Role is always PUBLIC and cannot be supplied by the client."
@@ -22297,6 +22403,39 @@
             "type": "string",
             "title": "Full Name"
           },
+          "first_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Name"
+          },
+          "middle_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Middle Name"
+          },
+          "last_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Name"
+          },
           "username": {
             "type": "string",
             "title": "Username"
@@ -22322,6 +22461,17 @@
               }
             ],
             "title": "Phone Number"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
           },
           "role": {
             "$ref": "#/components/schemas/Role"
@@ -22380,9 +22530,13 @@
         "required": [
           "id",
           "full_name",
+          "first_name",
+          "middle_name",
+          "last_name",
           "username",
           "email",
           "phone_number",
+          "address",
           "role",
           "police_badge_number",
           "station_id",

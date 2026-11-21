@@ -178,6 +178,70 @@ def test_updating_and_clearing_coordinates_keeps_them_out_of_audit(client, actor
     assert any((e.after_state or {}).get("coordinates_changed") for e in events)
 
 
+def test_found_person_coordinate_update_checks_version_and_preserves_details(client, actors):
+    case = create_case(
+        client,
+        actors.helpdesk,
+        "found-persons",
+        {**FOUND_PERSON, "physical_description": "Small scar above the right eyebrow"},
+    )
+    original_details = case["details"]
+    original_version = case["version"]
+    url = f"{API}/cases/found-persons/{case['id']}"
+    updated = client.patch(
+        url,
+        json={
+            "latitude": NEAR_HKP[0],
+            "longitude": NEAR_HKP[1],
+            "coordinate_source": "MAP_PIN",
+            "expected_version": original_version,
+        },
+        headers=actors.police.headers,
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["latitude"] == NEAR_HKP[0]
+    assert body["longitude"] == NEAR_HKP[1]
+    assert body["coordinate_source"] == "MAP_PIN"
+    assert body["version"] == original_version + 1
+    assert body["details"] == original_details
+
+    stale = client.patch(
+        url,
+        json={
+            "latitude": HKP[0],
+            "longitude": HKP[1],
+            "coordinate_source": "MAP_PIN",
+            "expected_version": original_version,
+        },
+        headers=actors.police.headers,
+    )
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "case_changed"
+    assert stale.json()["error"]["details"]["current_version"] == original_version + 1
+
+
+@pytest.mark.parametrize(
+    "coordinates",
+    [
+        {"latitude": 91, "longitude": 78.16, "coordinate_source": "MAP_PIN"},
+        {"latitude": 29.95, "longitude": 181, "coordinate_source": "MAP_PIN"},
+        {"latitude": 29.95, "longitude": 78.16},
+        {"latitude": 29.95, "longitude": 78.16, "coordinate_source": "INVENTED"},
+        {"latitude": 29.95, "coordinate_source": "MAP_PIN"},
+    ],
+)
+def test_found_person_coordinate_update_rejects_invalid_or_incomplete_values(client, actors, coordinates):
+    case = create_case(client, actors.helpdesk, "found-persons", FOUND_PERSON)
+    response = client.patch(
+        f"{API}/cases/found-persons/{case['id']}",
+        json={**coordinates, "expected_version": case["version"]},
+        headers=actors.helpdesk.headers,
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
 def test_link_locations_is_exact_dry_run_first_and_never_sets_coordinates(client, actors, places):
     exact = create_case(client, actors.helpdesk, "found-persons", {**FOUND_PERSON, "found_location": "  brahmakund "})
     local = create_case(client, actors.helpdesk, "found-persons", {**FOUND_PERSON, "found_location": "हर की पौड़ी"})

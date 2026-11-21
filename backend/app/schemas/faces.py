@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import Field
 
@@ -56,10 +57,10 @@ class MatchDetail(ReadModel):
 
 
 class MatchPhotoUrl(ReadModel):
-    side: str
+    side: Literal["left", "right"]
     attachment_id: uuid.UUID
     url: str
-    expires_in: int
+    expires_in: Literal[300]
     content_type: str
 
 

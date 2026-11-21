@@ -14,14 +14,19 @@ PostgreSQL 16 and PostGIS. Migrations are linear.
 | 0008 | Face embeddings and FACE match workflow columns |
 | 0009 | Mobile sync cursors, device/client record ids, `sync_devices` |
 | 0010 | Public portal: OTP challenges, sightings, push tokens, public information; case `source` / `public_review_status`; contact mobile/email verification metadata; notification EMAIL/PUSH + lifecycle templates |
+| 0011 | `PUBLIC` user role and one-time password-reset token foundation |
+| 0012 | Email/SMS password-reset codes (invalidates incompatible outstanding reset tokens only) |
+| 0013 | Nullable user registration profile fields and normalized PUBLIC mobile uniqueness |
 
 `0007` only adds nullable columns and one table, except `users.totp_enabled`, which is `false` for existing rows. It does not rewrite case text. Downgrade would drop those columns. Do not downgrade a database that has stored handover text or TOTP secrets; restore a backup instead.
 
 `0010` is additive. Existing staff cases keep `source=STAFF` and null `public_review_status`. Do not downgrade once public OTP, sighting, or citizen contact rows exist; restore a backup instead.
 
+`0011` and `0013` are additive for existing users. The four profile columns in `0013` are nullable, so old staff and PUBLIC rows remain valid. Existing usernames and phone numbers are not rewritten. Before creating the normalized PUBLIC-mobile unique index, the migration checks for duplicate final-ten-digit values and aborts without committing if any exist. `0012` intentionally invalidates only outstanding reset-token rows because the old token format is incompatible.
+
 The isolated copy of the operational volume was upgraded from `0001` to `0007`. `alembic check` on that copy exited 0. PostGIS `geography` columns produce a SQLAlchemy recognition warning and were not reported as a new upgrade operation.
 
-The original volume was not upgraded. Its server container was not started, so its live revision was not queried in place. The copy is the evidence that the volume, before upgrade, was at `0001`.
+The original volume has not been upgraded. A read-only check on 2026-11-21 confirmed revision `0001`; schema changes must first be proven on a restored copy and backed up before any approved operational upgrade.
 
 Application tables include stations, users, cases and four detail tables, contacts, notes, assignments, status history, matches, attachments, face embeddings, staff notifications, idempotency keys, sessions, login attempts, audit events, locations, legal holds, retention runs, notifications, worker heartbeats, sync devices, OTP challenges, public sightings, push device tokens, and public information items.
 

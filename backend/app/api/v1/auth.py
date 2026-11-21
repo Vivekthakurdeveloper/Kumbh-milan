@@ -38,14 +38,20 @@ def _tokens(pair: auth_service.TokenPair) -> TokenResponse:
 )
 def register(payload: RegisterRequest, request: Request, db: DbSession) -> TokenResponse:
     """
-    Self-register with a mobile number as username. Role is always PUBLIC and cannot be chosen.
-    Returns the same token structure as login.
+    Self-register with the same exact 10-digit mobile in username and phone_number. Role is always PUBLIC
+    and cannot be chosen. All supplied profile fields are persisted and the existing login token pair is returned.
     """
     pair = auth_service.register_public_user(
         db,
         username=payload.username,
         password=payload.password,
         full_name=payload.full_name,
+        first_name=payload.first_name,
+        middle_name=payload.middle_name,
+        last_name=payload.last_name,
+        phone_number=payload.phone_number,
+        email=str(payload.email) if payload.email is not None else None,
+        address=payload.address,
         user_agent=request.headers.get("user-agent"),
     )
     return _tokens(pair)

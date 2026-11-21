@@ -41,13 +41,20 @@ def _key(settings: Settings) -> bytes:
     return hmac.new(settings.jwt_secret.encode(), b"kumbh-setu/media-link/v1", hashlib.sha256).digest()
 
 
-def issue_token(settings: Settings, attachment: CaseAttachment, user: User) -> str:
+def issue_token(
+    settings: Settings,
+    attachment: CaseAttachment,
+    user: User,
+    *,
+    ttl_seconds: int | None = None,
+) -> str:
     now = utcnow()
+    ttl = settings.s3_presign_ttl_seconds if ttl_seconds is None else ttl_seconds
     return jwt.encode(
         {
             "sub": str(attachment.id), "uid": str(user.id), "tv": user.token_version,
             "aud": AUDIENCE, "iss": settings.jwt_issuer, "iat": now,
-            "exp": now + timedelta(seconds=settings.s3_presign_ttl_seconds),
+            "exp": now + timedelta(seconds=ttl),
         },
         _key(settings),
         algorithm="HS256",
@@ -79,15 +86,22 @@ class MediaLinks:
     def ttl_seconds(self) -> int:
         return self.settings.s3_presign_ttl_seconds
 
-    def url_for(self, attachment: CaseAttachment, actor: User) -> str:
+    def url_for(
+        self,
+        attachment: CaseAttachment,
+        actor: User,
+        *,
+        ttl_seconds: int | None = None,
+    ) -> str:
+        ttl = self.ttl_seconds if ttl_seconds is None else ttl_seconds
         filename = attachment.original_filename or f"attachment-{attachment.id.hex}"
         if self.settings.media_mode == "presigned":
             return self.storage.presign_get(
                 attachment.storage_key, content_type=attachment.content_type, filename=filename,
-                ttl_seconds=self.ttl_seconds,
+                ttl_seconds=ttl,
             )
         base = (self.settings.api_public_base_url or self._request_base).rstrip("/")
-        return f"{base}{MEDIA_PATH}{issue_token(self.settings, attachment, actor)}"
+        return f"{base}{MEDIA_PATH}{issue_token(self.settings, attachment, actor, ttl_seconds=ttl)}"
 
 
 def get_media_links(request: Request, storage: ObjectStorage = Depends(get_storage)) -> MediaLinks:

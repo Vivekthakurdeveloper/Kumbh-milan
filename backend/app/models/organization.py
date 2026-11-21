@@ -32,13 +32,23 @@ class User(TimestampMixin, Base):
         ),
         CheckConstraint("username = lower(username)", name="username_lowercase"),
         Index("ix_users_station_role_active", "station_id", "role", "is_active"),
+        Index(
+            "uq_users_public_mobile_normalized",
+            text("right(regexp_replace(phone_number, '[^0-9]', '', 'g'), 10)"),
+            unique=True,
+            postgresql_where=text("role = 'PUBLIC' AND phone_number IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    first_name: Mapped[str | None] = mapped_column(String(100))
+    middle_name: Mapped[str | None] = mapped_column(String(100))
+    last_name: Mapped[str | None] = mapped_column(String(100))
     username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     email: Mapped[str | None] = mapped_column(String(320), unique=True)
     phone_number: Mapped[str | None] = mapped_column(String(32))
+    address: Mapped[str | None] = mapped_column(String(500))
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[Role] = mapped_column(enum_type(Role, "user_role"), nullable=False)
     police_badge_number: Mapped[str | None] = mapped_column(String(64), unique=True)

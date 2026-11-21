@@ -41,6 +41,25 @@ def _body(status: int, code: str, message: str, details=None, headers=None) -> J
     )
 
 
+def _registration_validation_message(errors: list[dict]) -> str:
+    fields = {loc[-1] for err in errors if (loc := err.get("loc"))}
+    messages = {str(err.get("msg", "")).lower() for err in errors}
+    missing = sorted(
+        str(err["loc"][-1])
+        for err in errors
+        if err.get("type") == "missing" and err.get("loc")
+    )
+    if missing:
+        return f"Missing required field: {missing[0]}."
+    if {"username", "phone_number"} & fields or any("same mobile number" in message for message in messages):
+        return "Enter the same valid 10-digit mobile number for username and phone_number."
+    if "email" in fields:
+        return "Enter a valid email address."
+    if "password" in fields:
+        return "Password must be at least 8 characters."
+    return "Request validation failed."
+
+
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(_: Request, exc: AppError) -> JSONResponse:
@@ -48,12 +67,15 @@ def install_error_handlers(app: FastAPI) -> None:
         return _body(exc.status_code, exc.code, exc.message, exc.details, headers)
 
     @app.exception_handler(RequestValidationError)
-    async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
+    async def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
         # Submitted values are deliberately not echoed back: they may contain personal data.
+        errors = exc.errors()
         details = [
             {"loc": list(err.get("loc", ())), "msg": err.get("msg"), "type": err.get("type")}
-            for err in exc.errors()
+            for err in errors
         ]
+        if request.url.path == "/api/v1/auth/register":
+            return _body(422, "validation_error", _registration_validation_message(errors), details)
         return _body(422, "validation_failed", "Request validation failed", details)
 
     @app.exception_handler(StarletteHTTPException)

@@ -49,6 +49,7 @@ from app.services.cases import to_summary
 from app.services.idempotency import run_idempotent_operation
 
 S = CaseStatus
+MATCH_PHOTO_TTL_SECONDS = 300
 
 TRANSITIONS: dict[CaseStatus, frozenset[CaseStatus]] = {
     S.OPEN: frozenset({S.UNDER_REVIEW, S.ASSIGNED, S.CLOSED}),
@@ -987,11 +988,16 @@ def match_photo_url(db: Session, media, actor: User, match_id: uuid.UUID, side: 
     if attachment_id is None:
         raise NotFound("No candidate photograph on this side", code="attachment_not_found")
     attachment = db.get(CaseAttachment, attachment_id)
-    if attachment is None or attachment.deleted_at is not None or not is_downloadable(attachment):
+    if (
+        attachment is None
+        or attachment.case_id != case_id
+        or attachment.deleted_at is not None
+        or not is_downloadable(attachment)
+    ):
         raise NotFound("Candidate photograph is not available", code="attachment_not_available")
     case = db.get(Case, case_id)
-    ttl = media.ttl_seconds
-    url = media.url_for(attachment, actor)
+    ttl = MATCH_PHOTO_TTL_SECONDS
+    url = media.url_for(attachment, actor, ttl_seconds=ttl)
     record_audit(
         db,
         action=AuditAction.ATTACHMENT_ACCESSED,

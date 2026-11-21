@@ -39,6 +39,20 @@ def test_openapi_documents_every_operation(client):
             assert "401" in op["responses"], f"{method.upper()} {path} does not document 401"
 
 
+def test_openapi_documents_registration_error_and_match_photo_contracts(client):
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    assert set(schemas["ErrorBody"]["required"]) == {"code", "message", "request_id", "details"}
+    assert {
+        "username",
+        "password",
+        "full_name",
+        "first_name",
+        "last_name",
+        "phone_number",
+    } <= set(schemas["RegisterRequest"]["required"])
+    assert schemas["MatchPhotoUrl"]["properties"]["expires_in"]["const"] == 300
+
+
 def test_health_and_readiness(client):
     assert client.get("/health").json() == {"status": "ok"}
     ready = client.get("/ready")

@@ -1,8 +1,10 @@
 # Remaining work
 
+Engineer-ready backend tickets are maintained in [BACKEND_ENGINEERING_BACKLOG.md](BACKEND_ENGINEERING_BACKLOG.md).
+
 | Item | Status | Why it is not finished | Acceptance |
 |---|---|---|---|
-| Migrate the original Docker volume | BLOCKED | The volume is operational data at revision `0001` on the verified copy. Upgrade needs explicit approval after this recovery plan. | Approved window, fresh backup, upgrade, `schema-status` shows `0007` |
+| Migrate the original Docker volume | BLOCKED | The volume is operational data at revision `0001` on the verified copy. Upgrade needs explicit approval after this recovery plan. | Approved window, fresh backup, upgrade, `schema-status` shows `0013` |
 | Real SMS or WhatsApp delivery | BLOCKED | No vendor, DLT registration, or consent policy | Provider tests against a sandbox, no personal data in the body |
 | Production MFA | BLOCKED | TOTP is available but not an approved phishing-resistant programme | Chosen mechanism, enrollment, and recovery drill |
 | Legal retention periods | BLOCKED | Current day counts are code defaults (including `FACE_EMBEDDING_RETENTION_DAYS`) | Written approval, then configuration only |

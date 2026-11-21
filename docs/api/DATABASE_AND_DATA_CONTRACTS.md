@@ -1,6 +1,6 @@
 # Database and data contracts
 
-Source of truth: `backend/app/models/*.py`, `backend/app/schemas/*.py`, and Alembic revisions `0001`–`0007` in `backend/alembic/versions/`. Everything in sections 1–6 exists in the schema. Section 7 lists entities the frontend may expect that **do not exist**.
+Source of truth: `backend/app/models/*.py`, `backend/app/schemas/*.py`, and Alembic revisions `0001`–`0013` in `backend/alembic/versions/`. Everything in sections 1–6 exists in the schema. Section 7 lists entities the frontend may expect that **do not exist**.
 
 ## 1. Conventions
 
@@ -23,7 +23,7 @@ Source of truth: `backend/app/models/*.py`, `backend/app/schemas/*.py`, and Alem
 
 ```mermaid
 erDiagram
-    stations ||--o{ users : "station_id (null for ADMIN)"
+    stations ||--o{ users : "station_id (null for ADMIN/PUBLIC)"
     stations ||--o{ cases : "station_id"
     stations ||--o{ locations : "station_id (optional)"
     locations ||--o{ locations : "sector_id (parent SECTOR)"
@@ -70,12 +70,16 @@ Column types below are the API types. "Nullable" means the API can return `null`
 |---|---|---|---|
 | `id` | uuid | no | |
 | `full_name` | string(2–200) | no | |
-| `username` | string(3–64) | no | Pattern `^[A-Za-z0-9._-]+$`, stored lowercase. Unique. Immutable after creation. |
+| `first_name` | string(≤100) | yes | Required for new PUBLIC self-registrations; null on pre-0013 and staff rows unless later populated. |
+| `middle_name` | string(≤100) | yes | Empty string is allowed and preserved for PUBLIC registration. |
+| `last_name` | string(≤100) | yes | Required for new PUBLIC self-registrations; null on pre-0013 and staff rows unless later populated. |
+| `username` | string(3–64) | no | Unique and immutable. New PUBLIC registrations use the exact 10-digit mobile; legacy E.164-digit usernames remain valid for login. |
 | `email` | email | yes | Unique when set. |
-| `phone_number` | string(6–32) | yes | Pattern `^\+?[0-9 ()-]+$`. |
+| `phone_number` | string(6–32) | yes | New PUBLIC registrations use the same exact 10 digits as `username`. A partial functional unique index normalizes legacy E.164 and 10-digit PUBLIC values by their final ten digits. |
+| `address` | string(≤500) | yes | Optional PUBLIC registration address. |
 | `role` | `Role` | no | |
 | `police_badge_number` | string(2–64) | yes | **Required** when `role=POLICE_OFFICER`. Unique when set. |
-| `station_id` | uuid | yes | **Required** for `POLICE_OFFICER` and `HELP_DESK_OPERATOR`; `null` allowed only for `ADMIN`. DB CHECK `station_required_for_non_admin`. |
+| `station_id` | uuid | yes | **Required** for `POLICE_OFFICER` and `HELP_DESK_OPERATOR`; `null` allowed for `ADMIN` and `PUBLIC`. DB CHECK `station_required_for_non_admin`. |
 | `is_active` | bool | no | |
 | `last_login_at` | datetime | yes | |
 | `created_at`, `updated_at` | datetime | no | |

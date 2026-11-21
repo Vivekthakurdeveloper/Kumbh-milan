@@ -13,6 +13,7 @@ from app.auth.passwords import (
     hash_password,
     needs_rehash,
     validate_new_password,
+    validate_public_registration_password,
     verify_password,
 )
 from app.auth.tokens import create_access_token, hash_token, new_refresh_token, parse_refresh_token
@@ -76,8 +77,24 @@ def _normalise_login_username(username: str) -> str:
     return cleaned
 
 
+def _login_username_candidates(username: str) -> tuple[str, list[str]]:
+    """Return one lockout key and compatible stored usernames, newest ten-digit form first."""
+    cleaned = username.strip().lower()
+    lockout_key = _normalise_login_username(cleaned)
+    candidates = [cleaned]
+    if cleaned.isdigit():
+        if lockout_key not in candidates:
+            candidates.append(lockout_key)
+        country = get_settings().notification_default_country_code.lstrip("+")
+        if cleaned.startswith(country) and len(cleaned) - len(country) == 10:
+            local_mobile = cleaned[len(country):]
+            if local_mobile not in candidates:
+                candidates.append(local_mobile)
+    return lockout_key, candidates
+
+
 def login(db: Session, *, username: str, password: str, user_agent: str | None) -> TokenPair:
-    username = _normalise_login_username(username)
+    username, candidates = _login_username_candidates(username)
     ip = client_ip_var.get()
     if _is_locked_out(db, username):
         AUTH_FAILURES.labels("locked_out").inc()
@@ -85,7 +102,14 @@ def login(db: Session, *, username: str, password: str, user_agent: str | None) 
             "Too many failed sign-in attempts. Try again later.", code="account_temporarily_locked"
         )
 
-    user = db.scalar(select(User).where(User.username == username))
+    users_by_username = {
+        candidate.username: candidate
+        for candidate in db.scalars(select(User).where(User.username.in_(candidates)))
+    }
+    user = next(
+        (users_by_username[value] for value in candidates if value in users_by_username),
+        None,
+    )
     password_ok = verify_password(user.password_hash if user else dummy_hash(), password)
     if user is None or not password_ok or not user.is_active:
         db.add(LoginAttempt(username=username, client_ip=ip, succeeded=False))
@@ -181,7 +205,7 @@ def change_password(db: Session, *, user: User, current_password: str, new_passw
 
 
 def _canonical_mobile_username(username: str) -> tuple[str, str]:
-    """Return (username_digits, e164_phone). Username stores E.164 digits without '+'."""
+    """Return the legacy E.164-digit login key and E.164 phone for a mobile input."""
     settings = get_settings()
     digits = "".join(ch for ch in username.strip() if ch.isdigit())
     if len(digits) < 10 or len(digits) > 15:
@@ -217,19 +241,48 @@ def _create_session(db: Session, user: User, *, user_agent: str | None) -> Token
 
 
 def register_public_user(
-    db: Session, *, username: str, password: str, full_name: str, user_agent: str | None
+    db: Session,
+    *,
+    username: str,
+    password: str,
+    full_name: str,
+    first_name: str,
+    middle_name: str | None,
+    last_name: str,
+    phone_number: str,
+    email: str | None,
+    address: str | None,
+    user_agent: str | None,
 ) -> TokenPair:
     """Self-register a PUBLIC citizen account and issue the same token pair as login."""
-    mobile, phone = _canonical_mobile_username(username)
-    validate_new_password(password, username=mobile)
-    if db.scalar(select(User.id).where(User.username == mobile)):
-        raise Conflict("Username is already taken", code="duplicate")
+    if len(username) != 10 or not username.isdigit() or username != phone_number:
+        raise ValidationFailed(
+            "username and phone_number must contain the same valid 10-digit mobile number",
+            code="validation_error",
+        )
+    validate_public_registration_password(password)
+    legacy_username, _ = _canonical_mobile_username(username)
+    normalized_phone = func.right(func.regexp_replace(User.phone_number, r"[^0-9]", "", "g"), 10)
+    if db.scalar(
+        select(User.id).where(
+            (normalized_phone == phone_number)
+            | User.username.in_((username, legacy_username))
+        )
+    ):
+        raise Conflict("Mobile number is already registered", code="username_taken")
+    if email and db.scalar(select(User.id).where(func.lower(User.email) == email.lower())):
+        raise Conflict("Email address is already registered", code="email_taken")
 
     user = User(
         id=uuid.uuid4(),
         full_name=full_name.strip(),
-        username=mobile,
-        phone_number=phone,
+        first_name=first_name.strip(),
+        middle_name=middle_name.strip() if middle_name is not None else None,
+        last_name=last_name.strip(),
+        username=username,
+        phone_number=phone_number,
+        email=email,
+        address=address.strip() if address is not None else None,
         password_hash=hash_password(password),
         role=Role.PUBLIC,
         station_id=None,
@@ -240,7 +293,12 @@ def register_public_user(
         db.flush()  # Persist the user before audit FK / session rows reference user.id.
     except IntegrityError as exc:
         db.rollback()
-        raise Conflict("Username is already taken", code="duplicate") from exc
+        constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        if constraint == "uq_users_email":
+            raise Conflict("Email address is already registered", code="email_taken") from exc
+        if constraint in {"uq_users_username", "uq_users_public_mobile_normalized"}:
+            raise Conflict("Mobile number is already registered", code="username_taken") from exc
+        raise Conflict("Registration conflicts with an existing account", code="registration_conflict") from exc
 
     record_audit(
         db,
@@ -248,10 +306,10 @@ def register_public_user(
         entity_type="user",
         entity_id=user.id,
         actor_user_id=user.id,
-        after={"username": mobile, "role": Role.PUBLIC, "source": "self_registration"},
+        after={"username": username, "role": Role.PUBLIC, "source": "self_registration"},
     )
     pair = _create_session(db, user, user_agent=user_agent)
-    db.add(LoginAttempt(username=mobile, client_ip=client_ip_var.get(), succeeded=True))
+    db.add(LoginAttempt(username=legacy_username, client_ip=client_ip_var.get(), succeeded=True))
     record_audit(
         db, action=AuditAction.LOGIN_SUCCEEDED, entity_type="user", actor_user_id=user.id, entity_id=user.id
     )

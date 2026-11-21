@@ -65,9 +65,13 @@ class PasswordResetRequest(StrictModel):
 class UserRead(ReadModel):
     id: uuid.UUID
     full_name: str
+    first_name: str | None
+    middle_name: str | None
+    last_name: str | None
     username: str
     email: str | None
     phone_number: str | None
+    address: str | None
     role: Role
     police_badge_number: str | None
     station_id: uuid.UUID | None

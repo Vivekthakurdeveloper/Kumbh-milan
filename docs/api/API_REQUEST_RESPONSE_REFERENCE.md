@@ -110,7 +110,7 @@ A case id outside the caller's scope, or of a different type than the URL's `{ty
 
 ## 2. Authentication
 
-### Endpoint: Register (PUBLIC) — `POST /api/v1/auth/register` *(new)*
+### Endpoint: Register (PUBLIC) — `POST /api/v1/auth/register`
 
 **Purpose:** citizen self-registration without staff assistance. **Auth:** none. **Role assigned:** always `PUBLIC` (clients cannot choose or submit a role). **Rate limit:** `RATE_LIMIT_REGISTER_PER_MINUTE` per IP (fail-closed).
 
@@ -118,20 +118,43 @@ A case id outside the caller's scope, or of a different type than the URL's `{ty
 
 | Field | Type | Required | Rules |
 |---|---|---|---|
-| `username` | string | yes | Digits only, 10–15 chars. Treated as a mobile number and stored as E.164 digits without `+` (e.g. `9876543210` → `919876543210`). |
-| `password` | string | yes | Same strength rules as staff passwords (`PASSWORD_MIN_LENGTH`, mixed character classes). |
+| `username` | string | yes | Exactly 10 digits and identical to `phone_number`. New registrations retain this 10-digit value; legacy E.164 PUBLIC usernames remain login-compatible. |
+| `password` | string | yes | 8–128 characters. This registration policy does not weaken the existing staff/change/reset password policy. |
 | `full_name` | string | yes | 2–200 chars. |
+| `first_name` | string | yes | 1–100 chars after trimming. |
+| `middle_name` | string or null | no | Up to 100 chars; an empty string is valid and is preserved. |
+| `last_name` | string | yes | 1–100 chars after trimming. |
+| `phone_number` | string | yes | Exactly 10 digits and identical to `username`. |
+| `email` | email or null | no | Valid email format when supplied; unique when set. |
+| `address` | string or null | no | Up to 500 chars. |
 
 <!-- validate: app.schemas.auth:RegisterRequest -->
 ```json
-{"username": "9876543210", "password": "SecurePassword123", "full_name": "Test User"}
+{
+  "username": "9000000001",
+  "password": "SecurePass123!",
+  "full_name": "Rashmi D",
+  "first_name": "Rashmi",
+  "middle_name": "",
+  "last_name": "D",
+  "phone_number": "9000000001",
+  "email": "rashmi@example.com",
+  "address": "Haridwar"
+}
 ```
 
-**Success 201:** `TokenResponse` (same structure as login). **Errors:** `409 duplicate`, `422 validation_failed` / `weak_password` / `invalid_phone`, `429 too_many_requests`.
+**Success 201:** `TokenResponse` (same token mechanism and configured access-token lifetime as login).
 
-**`GET /auth/me` for PUBLIC:** `role = "PUBLIC"`, `permissions = []`. Allowed citizen case endpoints are enforced by a default-deny route allowlist plus `reported_by_user_id` ownership, not by staff permission strings.
+| HTTP | `code` | Cause |
+|---|---|---|
+| 409 | `username_taken` | The normalized mobile is already registered, including a legacy E.164 PUBLIC account. |
+| 409 | `email_taken` | Optional email is already registered. |
+| 422 | `validation_error` | Required field missing, invalid/mismatched mobile, invalid email, or password shorter than 8 characters. |
+| 429 | `rate_limit_exceeded` | Too many attempts for the client IP. Includes `Retry-After` and `details.policy = "register"`. |
 
-**Status:** Newly added — tested.
+**`GET /auth/me` for PUBLIC:** returns every saved profile field, `role = "PUBLIC"`, and `permissions = []`. Allowed citizen case endpoints are enforced by a default-deny route allowlist plus `reported_by_user_id` ownership, not by staff permission strings.
+
+**Status:** Implemented — tested.
 
 ### Endpoint: Login — `POST /api/v1/auth/login`
 
@@ -204,9 +227,13 @@ A case id outside the caller's scope, or of a different type than the URL's `{ty
 {
   "id": "9a1e4b7c-2d3f-4a5b-8c6d-7e8f9a0b1c2d",
   "full_name": "Sample Officer Rawat",
+  "first_name": null,
+  "middle_name": null,
+  "last_name": null,
   "username": "officer.hkp",
   "email": null,
   "phone_number": null,
+  "address": null,
   "role": "POLICE_OFFICER",
   "police_badge_number": "UK-HDW-0001",
   "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
@@ -221,6 +248,30 @@ A case id outside the caller's scope, or of a different type than the URL's `{ty
     "match:propose", "match:review", "note:create", "note:sensitive",
     "notification:send", "user:list_assignable"
   ]
+}
+```
+
+A newly registered PUBLIC account returns its saved registration values in the same schema:
+
+```json
+{
+  "id": "7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11",
+  "full_name": "Rashmi D",
+  "first_name": "Rashmi",
+  "middle_name": "",
+  "last_name": "D",
+  "username": "9000000001",
+  "email": "rashmi@example.com",
+  "phone_number": "9000000001",
+  "address": "Haridwar",
+  "role": "PUBLIC",
+  "police_badge_number": null,
+  "station_id": null,
+  "is_active": true,
+  "last_login_at": "2026-11-21T05:45:12Z",
+  "created_at": "2026-11-21T05:45:12Z",
+  "updated_at": "2026-11-21T05:45:12Z",
+  "permissions": []
 }
 ```
 
@@ -403,9 +454,13 @@ Example: `GET /api/v1/users?role=POLICE_OFFICER&station_id=3f6b2c1e-8a4d-4e2b-9c
 {
   "id": "1b2c3d4e-5f60-4718-89ab-cdef01234567",
   "full_name": "Sample Desk Operator Negi",
+  "first_name": null,
+  "middle_name": null,
+  "last_name": null,
   "username": "desk.s4.negi",
   "email": "desk.s4.negi@example.org",
   "phone_number": "+91 90000 00000",
+  "address": null,
   "role": "HELP_DESK_OPERATOR",
   "police_badge_number": null,
   "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
@@ -527,7 +582,7 @@ The backend imposes no mandatory person fields. If operations need minimum data 
 
 ### 6.3 Endpoint: Register a case — `POST /api/v1/cases/{type}`
 
-**Purpose:** registration forms. **Auth:** Bearer, all roles (`case:create`). **Headers:** optional `Idempotency-Key` (strongly recommended: generate one per form submission so a retry after a network failure does not create a duplicate case). **Rate limit:** 60/min per user.
+**Purpose:** registration forms. **Auth:** Bearer. Staff roles `HELP_DESK_OPERATOR`, `POLICE_OFFICER`, and `ADMIN` can create found-person cases; existing owned PUBLIC case creation remains supported. Admins must provide `station_id`; other staff are restricted to their own station. **Headers:** optional `Idempotency-Key` (strongly recommended: generate one per form submission so a retry after a network failure does not create a duplicate case). **Rate limit:** 60/min per user.
 
 Missing person request:
 
@@ -1491,12 +1546,14 @@ Returns only matches that touch at least one case visible to the caller — the 
 
 **Purpose:** short-lived, browser-reachable URL for the left or right candidate photograph. **Roles:** `match:review` with a case in scope. **Path:** `side` is `left` or `right`. Audited as `ATTACHMENT_ACCESSED` with `purpose: match_review`.
 
-**Host.** `url` is never an internal hostname (no `localhost:8333`, no `objectstore`). It is either a direct signed link on the object store's public host (`S3_PUBLIC_ENDPOINT_URL`, or AWS S3), or `<api origin>/api/v1/media/<token>` served by this API; see [Media links](#media-links-get-apiv1mediatoken). Use it as `<img src>`; it needs no `Authorization` header and expires after `expires_in` seconds, so request a new one instead of caching it. **No `similarity_score`**: the response has exactly the five fields below and never a face-match percentage.
+**Host.** `url` is never an internal hostname (no `localhost:8333`, no `objectstore`). It is either a direct signed link on the object store's public host (`S3_PUBLIC_ENDPOINT_URL`, or AWS S3), or `<api origin>/api/v1/media/<token>` served by this API; see [Media links](#media-links-get-apiv1mediatoken). Use it as `<img src>`; it needs no `Authorization` header and expires after exactly **300 seconds**, so request a new one instead of caching it. The attachment is checked against the selected match side before a URL is issued. **No `similarity_score`**: the response has exactly the five fields below and never a face-match percentage.
 
 <!-- validate: app.schemas.faces:MatchPhotoUrl -->
 ```json
 {"side": "left", "attachment_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "url": "https://…", "expires_in": 300, "content_type": "image/jpeg"}
 ```
+
+**Errors:** `401` missing/invalid/expired access token; `403 permission_denied`; `404 match_not_found`, `attachment_not_found`, or `attachment_not_available`; `422 validation_failed` for an invalid UUID or side. An expired proxy URL returns `410 media_link_expired`.
 
 **Status:** Implemented — tested.
 
@@ -1886,11 +1943,11 @@ Every `code` the backend can return, by HTTP status. Codes are stable identifier
 | 403 | `permission_denied`, `station_scope`, `self_lockout`, `separation_of_duties`, `mfa_enrollment_required`, `step_up_required` |
 | 404 | `not_found` (unknown route), `case_not_found`, `note_not_found`, `attachment_not_found`, `contact_not_found`, `match_not_found`, `station_not_found`, `user_not_found`, `location_not_found`, `legal_hold_not_found`, `retention_run_not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `case_changed`, `case_closed`, `case_inactive`, `case_anonymized`, `already_assigned`, `assignee_required`, `invalid_status_transition`, `invalid_custody_transition`, `custody_not_released`, `duplicate_match`, `match_already_reviewed`, `match_not_confirmed` (revoke), `case_not_confirmable`, `conflicting_confirmed_match`, `case_not_matchable`, `attachment_not_available`, `idempotency_key_reused`, `idempotency_retry`, `duplicate`, `location_code_taken`, `mfa_disabled`, `mfa_already_enabled`, `mfa_enrollment_missing`, `two_person_rule`, `retention_run_state`, `legal_hold_released`, `execute_via_retention_task` |
+| 409 | `case_changed`, `case_closed`, `case_inactive`, `case_anonymized`, `already_assigned`, `assignee_required`, `invalid_status_transition`, `invalid_custody_transition`, `custody_not_released`, `duplicate_match`, `match_already_reviewed`, `match_not_confirmed` (revoke), `case_not_confirmable`, `conflicting_confirmed_match`, `case_not_matchable`, `attachment_not_available`, `idempotency_key_reused`, `idempotency_retry`, `duplicate`, `username_taken`, `email_taken`, `registration_conflict`, `location_code_taken`, `mfa_disabled`, `mfa_already_enabled`, `mfa_enrollment_missing`, `two_person_rule`, `retention_run_state`, `legal_hold_released`, `execute_via_retention_task` |
 | 413 | `payload_too_large` |
 | 415 | `unsupported_media_type`, `media_type_mismatch`, `content_type_mismatch` |
-| 422 | `validation_failed` (schema; `details` = list), `station_required`, `invalid_station`, `invalid_location`, `coordinates_out_of_area`, `coordinate_source_required`, `required_field`, `invalid_assignee`, `match_required`, `invalid_match`, `match_not_confirmed` (status change), `verification_required`, `safeguarding_evidence_required`, `storage_location_required`, `handover_required`, `blank_note`, `correction_target_required`, `unexpected_correction_target`, `incompatible_case_types`, `invalid_idempotency_key`, `empty_file`, `malware_detected`, `invalid_current_password`, `weak_password`, `badge_required`, `invalid_sector`, `radius_too_large`, `invalid_bbox`, `bbox_too_large`, `unsupported_locale`, `invalid_phone`, `invalid_range`, `range_too_large`, `mfa_code_invalid` |
-| 429 | `too_many_requests` (`details.policy`: `login`, `refresh`, `password_change`, `upload`, `case_create`, `search`, `general`; `Retry-After`), `account_temporarily_locked` |
+| 422 | `validation_failed` (general schema; `details` = list), `validation_error` (registration), `station_required`, `invalid_station`, `invalid_location`, `coordinates_out_of_area`, `coordinate_source_required`, `required_field`, `invalid_assignee`, `match_required`, `invalid_match`, `match_not_confirmed` (status change), `verification_required`, `safeguarding_evidence_required`, `storage_location_required`, `handover_required`, `blank_note`, `correction_target_required`, `unexpected_correction_target`, `incompatible_case_types`, `invalid_idempotency_key`, `empty_file`, `malware_detected`, `invalid_current_password`, `weak_password`, `badge_required`, `invalid_sector`, `radius_too_large`, `invalid_bbox`, `bbox_too_large`, `unsupported_locale`, `invalid_phone`, `invalid_range`, `range_too_large`, `mfa_code_invalid` |
+| 429 | `too_many_requests` (`details.policy`: `login`, `refresh`, `password_change`, `upload`, `case_create`, `search`, `general`; `Retry-After`), `rate_limit_exceeded` (`details.policy = "register"`; `Retry-After`), `account_temporarily_locked` |
 | 500 | `internal_error` |
 | 503 | `rate_limiter_unavailable` (`Retry-After`), `storage_unavailable`, `service_unavailable` |
 
@@ -1900,6 +1957,7 @@ Every `code` the backend can return, by HTTP status. Codes are stable identifier
 
 | Policy | Applies to | Limit | Keyed by |
 |---|---|---|---|
+| `register` | `POST /auth/register` | 10 | client IP, fail-closed |
 | `login` | `POST /auth/login` | 30 | client IP |
 | `refresh` | `POST /auth/refresh` | 60 | client IP |
 | `password_change` | change-password, admin `POST /users/{id}/reset-password` | 10 per hour | user |

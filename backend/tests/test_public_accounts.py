@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import io
 import re
+import uuid
 from datetime import date, timedelta
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+import jwt
+import pytest
 from sqlalchemy import select
 
+from app.auth.passwords import hash_password
 from app.common.time import utcnow
+from app.config import get_settings
 from app.database import SessionLocal
 from app.models import PasswordResetToken, User
+from app.models.enums import Role
 from app.notifications import MockProvider
 from tests.helpers import (
     API,
@@ -45,10 +51,30 @@ TINY_JPEG = (
 )
 
 
+def _registration_payload(
+    mobile: str = "9876543210",
+    full_name: str = "Test Citizen",
+    *,
+    password: str = PUBLIC_PASSWORD,
+) -> dict:
+    names = full_name.split(maxsplit=1)
+    return {
+        "username": mobile,
+        "password": password,
+        "full_name": full_name,
+        "first_name": names[0],
+        "middle_name": "",
+        "last_name": names[1] if len(names) > 1 else "Citizen",
+        "phone_number": mobile,
+        "email": f"citizen-{mobile}@example.com",
+        "address": "Haridwar",
+    }
+
+
 def _register(client, mobile: str = "9876543210", full_name: str = "Test Citizen") -> dict:
     response = client.post(
         f"{API}/auth/register",
-        json={"username": mobile, "password": PUBLIC_PASSWORD, "full_name": full_name},
+        json=_registration_payload(mobile, full_name),
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -71,13 +97,25 @@ def test_public_registration_login_me_refresh_logout(client, actors):
     assert body["role"] == "PUBLIC"
     assert body["permissions"] == []
     assert body["station_id"] is None
-    assert body["username"] == "919876543210"
+    assert body["username"] == "9876543210"
+    assert body["phone_number"] == "9876543210"
+    assert body["full_name"] == "Test Citizen"
+    assert body["first_name"] == "Test"
+    assert body["middle_name"] == ""
+    assert body["last_name"] == "Citizen"
+    assert body["email"] == "citizen-9876543210@example.com"
+    assert body["address"] == "Haridwar"
+    assert "password" not in body and "password_hash" not in body
 
-    # Login with the original 10-digit mobile still works after canonicalisation.
+    # New ten-digit storage and legacy E.164 login forms both resolve to the same account.
     relogin = client.post(
         f"{API}/auth/login", json={"username": "9876543210", "password": PUBLIC_PASSWORD}
     )
     assert relogin.status_code == 200
+    legacy_login = client.post(
+        f"{API}/auth/login", json={"username": "919876543210", "password": PUBLIC_PASSWORD}
+    )
+    assert legacy_login.status_code == 200
     refreshed = client.post(f"{API}/auth/refresh", json={"refresh_token": relogin.json()["refresh_token"]})
     assert refreshed.status_code == 200
     assert client.post(f"{API}/auth/logout", headers={"Authorization": f"Bearer {refreshed.json()['access_token']}"}).status_code == 204
@@ -86,25 +124,125 @@ def test_public_registration_login_me_refresh_logout(client, actors):
     assert client.post(f"{API}/auth/login", json={"username": "police", "password": PASSWORD}).status_code == 200
 
 
+def test_me_rejects_missing_and_expired_access_tokens(client, actors):
+    missing = client.get(f"{API}/auth/me")
+    assert missing.status_code == 401
+    assert missing.json()["error"]["code"] == "unauthenticated"
+
+    tokens = _register(client, mobile="9000000077")
+    settings = get_settings()
+    claims = jwt.decode(tokens["access_token"], options={"verify_signature": False})
+    claims["exp"] = utcnow() - timedelta(seconds=1)
+    expired_token = jwt.encode(claims, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    expired = client.get(
+        f"{API}/auth/me",
+        headers={"Authorization": f"Bearer {expired_token}"},
+    )
+    assert expired.status_code == 401
+    assert expired.json()["error"]["code"] == "token_expired"
+
+
 def test_duplicate_public_registration_rejected(client, actors):
     _register(client, mobile="9123456780")
     again = client.post(
         f"{API}/auth/register",
-        json={"username": "9123456780", "password": PUBLIC_PASSWORD, "full_name": "Other"},
+        json=_registration_payload("9123456780", "Other Citizen"),
     )
     assert again.status_code == 409
-    assert again.json()["error"]["code"] == "duplicate"
+    assert again.json()["error"]["code"] == "username_taken"
+
+
+def test_legacy_e164_public_account_keeps_login_and_blocks_duplicate_registration(client):
+    with SessionLocal() as db:
+        db.add(
+            User(
+                id=uuid.uuid4(),
+                full_name="Legacy Citizen",
+                username="919000000066",
+                phone_number="+919000000066",
+                password_hash=hash_password(PUBLIC_PASSWORD),
+                role=Role.PUBLIC,
+                station_id=None,
+                is_active=True,
+            )
+        )
+        db.commit()
+
+    login = client.post(
+        f"{API}/auth/login",
+        json={"username": "9000000066", "password": PUBLIC_PASSWORD},
+    )
+    assert login.status_code == 200, login.text
+    duplicate = client.post(
+        f"{API}/auth/register",
+        json=_registration_payload("9000000066"),
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "username_taken"
+
+
+@pytest.mark.parametrize(
+    ("change", "message_fragment"),
+    [
+        ({"username": "123456789", "phone_number": "123456789"}, "10-digit mobile"),
+        ({"phone_number": "9000000002"}, "same valid 10-digit"),
+        ({"email": "not-an-email"}, "valid email"),
+        ({"password": "short7"}, "at least 8"),
+    ],
+)
+def test_public_registration_validation(client, change, message_fragment):
+    response = client.post(
+        f"{API}/auth/register",
+        json={**_registration_payload(), **change},
+    )
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "validation_error"
+    assert message_fragment in error["message"]
+    assert error["request_id"] == response.headers["X-Request-ID"]
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["username", "password", "full_name", "first_name", "last_name", "phone_number"],
+)
+def test_public_registration_requires_all_mandatory_fields(client, field):
+    payload = _registration_payload()
+    payload.pop(field)
+    response = client.post(f"{API}/auth/register", json=payload)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+    assert field in response.json()["error"]["message"].lower()
+
+
+def test_public_registration_accepts_exactly_eight_character_password(client):
+    response = client.post(
+        f"{API}/auth/register",
+        json=_registration_payload("9000000088", password="abcdefgh"),
+    )
+    assert response.status_code == 201, response.text
+
+
+def test_public_registration_optional_profile_fields_may_be_omitted(client):
+    payload = _registration_payload("9000000089")
+    for field in ("middle_name", "email", "address"):
+        payload.pop(field)
+    response = client.post(f"{API}/auth/register", json=payload)
+    assert response.status_code == 201, response.text
+    me = client.get(
+        f"{API}/auth/me",
+        headers={"Authorization": f"Bearer {response.json()['access_token']}"},
+    )
+    assert me.status_code == 200
+    assert me.json()["middle_name"] is None
+    assert me.json()["email"] is None
+    assert me.json()["address"] is None
 
 
 def test_public_registration_rejects_role_field(client, actors):
     response = client.post(
         f"{API}/auth/register",
-        json={
-            "username": "9111222333",
-            "password": PUBLIC_PASSWORD,
-            "full_name": "Nope",
-            "role": "ADMIN",
-        },
+        json={**_registration_payload("9111222333", "Nope Citizen"), "role": "ADMIN"},
     )
     assert response.status_code == 422
 
@@ -140,7 +278,7 @@ def test_public_can_create_all_four_case_types_and_only_see_own(client, actors):
         created.append(body)
 
     with SessionLocal() as db:
-        user_a = db.scalar(select(User).where(User.username == "919811111111"))
+        user_a = db.scalar(select(User).where(User.username == "9811111111"))
         assert user_a is not None
         for case in created:
             assert case["reported_by_user_id"] == str(user_a.id)
@@ -226,7 +364,7 @@ def test_forgot_password_anti_enumeration_and_reset_flow(client, actors, monkeyp
     code = match.group(1)
 
     with SessionLocal() as db:
-        user = db.scalar(select(User).where(User.username == "919844444444"))
+        user = db.scalar(select(User).where(User.username == "9844444444"))
         token_row = db.scalar(
             select(PasswordResetToken)
             .where(PasswordResetToken.user_id == user.id, PasswordResetToken.consumed_at.is_(None))
@@ -264,7 +402,7 @@ def test_expired_reset_code_rejected(client, actors, monkeypatch):
     match = re.search(r"\b(\d{8})\b", provider.deliveries[0]["body"])
     assert match is not None
     with SessionLocal() as db:
-        user = db.scalar(select(User).where(User.username == "919855555555"))
+        user = db.scalar(select(User).where(User.username == "9855555555"))
         row = db.scalar(select(PasswordResetToken).where(PasswordResetToken.user_id == user.id))
         row.expires_at = utcnow() - timedelta(minutes=1)
         db.commit()

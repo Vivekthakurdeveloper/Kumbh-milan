@@ -20,7 +20,7 @@ Workers are OS processes. A CLI command that is not supervised is not a running 
 - Notification delivery is idempotent on the outbox key. The mock provider can raise a temporary `ProviderError`; the row stays retryable.
 - The notifications worker dispatches `SMS` / `WHATSAPP` (MSG91 or mock), `EMAIL` (SMTP), and `PUSH` (Firebase FCM). Permanent FCM invalid-token responses deactivate the stored device token. Install the optional `push` extra on worker images when FCM is enabled.
 - Maintenance should continue to purge expired OTP challenge rows alongside idempotency keys and sessions.
-- Do not point these processes at the operational database until the schema there is at `0010` by an approved migration.
+- Do not point these processes at the operational database until the schema there is at the build's expected revision (`0013`) through an approved migration.
 
 ## Local start
 

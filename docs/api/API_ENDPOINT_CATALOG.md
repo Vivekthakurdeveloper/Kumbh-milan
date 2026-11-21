@@ -16,12 +16,12 @@ Detailed request and response contracts are in [API_REQUEST_RESPONSE_REFERENCE.m
 
 | Label | Meaning |
 |---|---|
-| **Implemented — tested** | Code inspected; route present in the generated OpenAPI; exercised by an automated test in `backend/tests/` and/or the live HTTP harness `qa/api_smoke.py`. Latest full pytest: 347 passed / 1 skipped (2026-11-13). Earlier HTTP harness: `docs/evidence/QA_LOCAL_RUN.md` (144/144). |
+| **Implemented — tested** | Code inspected; route present in the generated OpenAPI; exercised by an automated test in `backend/tests/` and/or the live HTTP harness `qa/api_smoke.py`. Latest full pytest: 378 passed / 1 skipped (2026-11-21). Earlier HTTP harness: `docs/evidence/QA_LOCAL_RUN.md` (144/144). |
 | **Implemented — no test found** | Code inspected and route present, but no test exercising it was found. |
 | **Partial** | Endpoint exists but does not cover the full product requirement (see the gap register). |
 | **Blocked** | Endpoint exists but its effect depends on an unresolved external dependency. |
 
-Every `/api/v1` operation can additionally return `429 too_many_requests` (rate limit), `503 rate_limiter_unavailable` (shared limiter down), `413 payload_too_large` (body over `MAX_REQUEST_BYTES`, default 30 MB), and `500 internal_error`. These are not repeated per row.
+Every `/api/v1` operation can additionally return `429 too_many_requests` (rate limit; registration uses the contract-specific `rate_limit_exceeded`), `503 rate_limiter_unavailable` (shared limiter down), `413 payload_too_large` (body over `MAX_REQUEST_BYTES`, default 30 MB), and `500 internal_error`. These are not repeated per row.
 
 Handler paths are relative to `backend/app/api/`.
 
@@ -39,7 +39,7 @@ Not for frontend use except an optional "service status" indicator using `/healt
 
 | Method | Path | Purpose / screen | Auth | Roles | Success | Main error codes | Status | Handler |
 |---|---|---|---|---|---|---|---|---|
-| POST | `/api/v1/auth/register` | Citizen self-registration (always PUBLIC) | None | — | 201 `TokenResponse` | 409 `duplicate`; 422 `weak_password`, `invalid_phone`; 429 | **Newly added — tested** | `v1/auth.py:register` |
+| POST | `/api/v1/auth/register` | Citizen self-registration with persisted profile fields (always PUBLIC) | None | — | 201 `TokenResponse` | 409 `username_taken`, `email_taken`; 422 `validation_error`; 429 `rate_limit_exceeded` + `Retry-After` | Implemented — tested | `v1/auth.py:register` |
 | POST | `/api/v1/auth/login` | Login screen (staff + PUBLIC) | None | — | 200 `TokenResponse` | 401 `invalid_credentials`; 429 `account_temporarily_locked`, `too_many_requests`; 422 | Implemented — tested | `v1/auth.py:login` |
 | POST | `/api/v1/auth/refresh` | Silent token refresh | None (refresh token in body) | — | 200 `TokenResponse` | 401 `invalid_refresh_token`, `session_revoked`; 422 | Implemented — tested | `v1/auth.py:refresh` |
 | POST | `/api/v1/auth/logout` | Logout | Bearer | All roles | 204 | 401 | Implemented — tested | `v1/auth.py:logout` |
@@ -98,7 +98,7 @@ The same seven operations are generated for each case type from `backend/app/ser
 
 | Method | Path | Purpose / screen | Roles | Success | Main error codes | Side effects | Status |
 |---|---|---|---|---|---|---|---|
-| POST | `/api/v1/cases/{type}` | Registration form | All roles | 201 `{Type}CaseRead` (header `Idempotent-Replayed: true` on replay) | 403 `station_scope`; 409 `idempotency_key_reused`; 422 `station_required`, `invalid_station`, `invalid_location`, `coordinates_out_of_area`, `invalid_idempotency_key` | Allocates case number; status `OPEN`; status-history row; audit `CASE_CREATED`; encrypted contact; **automatic match suggestions** (best effort) | Implemented — tested |
+| POST | `/api/v1/cases/{type}` | Registration form; found-persons verified for Help desk, Police, and Admin (existing PUBLIC ownership flow retained) | All roles | 201 `{Type}CaseRead` (header `Idempotent-Replayed: true` on replay) | 403 `station_scope`; 409 `idempotency_key_reused`; 422 `station_required`, `invalid_station`, `invalid_location`, `coordinates_out_of_area`, `invalid_idempotency_key` | Allocates case number; status `OPEN`; status-history row; audit `CASE_CREATED`; encrypted contact; **automatic match suggestions** (best effort) | Implemented — tested |
 | GET | `/api/v1/cases/{type}` | Type-specific case list | All roles | 200 `Page[{Type}CaseRead]` (full records) | 401; 422 | — | Implemented — tested |
 | GET | `/api/v1/cases/{type}/{case_id}` | Case details | All roles (scoped) | 200 `{Type}CaseRead` | 404 `case_not_found` (also for a case of another type) | — | Implemented — tested |
 | PATCH | `/api/v1/cases/{type}/{case_id}` | Edit case | All roles (scoped) | 200 `{Type}CaseRead` | 404; 409 `case_changed`, `case_closed`; 422 `required_field`, `coordinate_source_required` | Audit `CASE_UPDATED` / `CONTACT_UPDATED`; re-runs matching when details or position change | Implemented — tested |
@@ -142,7 +142,7 @@ That is **19 operations**.
 |---|---|---|---|---|---|---|---|
 | GET | `/api/v1/matches` | Cross-case match review queue | All roles | 200 `Page[MatchQueueItem]` | 401 | Implemented — tested | `v1/matches.py:list_match_queue` |
 | GET | `/api/v1/matches/{match_id}` | Side-by-side match review detail | All roles with a case in scope | 200 `MatchDetail` | 404 `match_not_found` | Implemented — tested | `get_match` |
-| GET | `/api/v1/matches/{match_id}/photos/{side}` | Browser-reachable short-lived URL for candidate photo (`left`/`right`); no similarity score | Police, Admin (`match:review`) | 200 `MatchPhotoUrl` | 403; 404 | Implemented — tested | `get_match_photo` |
+| GET | `/api/v1/matches/{match_id}/photos/{side}` | Browser-reachable private candidate photo URL (`left`/`right`), fixed 300-second expiry; no similarity score | Police, Admin (`match:review`) | 200 `MatchPhotoUrl` | 401; 403; 404 `match_not_found`, `attachment_not_found`, `attachment_not_available`; 422 | Implemented — tested | `get_match_photo` |
 | GET | `/api/v1/matches/{match_id}/history` | Match audit history | Police, Admin (`match:review`) | 200 `MatchHistoryEvent[]` | 404 | Implemented — tested | `get_match_history` |
 
 Query on list: `status` (default `PROPOSED`), `confidence_band`, `match_domain`, `source` (`MANUAL`/`AUTOMATIC`/`FACE`), `limit`, `offset`. Scoped like dashboard `pending_match_reviews`. Confirm/reject still uses `POST /cases/{id}/matches/{mid}/review`. FACE candidates require two different officers before confirmation. Embeddings are never returned.

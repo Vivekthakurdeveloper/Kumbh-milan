@@ -78,7 +78,8 @@ def get_match_photo(
     """
     The `url` is built for the browser: on the object store's public host when S3_PUBLIC_ENDPOINT_URL is
     configured, otherwise on this API (`/api/v1/media/{token}`). It is never an internal hostname. Use it
-    directly as `<img src>`; it expires after `expires_in` seconds, so fetch a new one rather than caching it.
+    directly as `<img src>`; match-photo links expire after exactly 300 seconds, so fetch a new one rather
+    than caching it.
     The response carries no similarity score.
     """
     return workflow_service.match_photo_url(db, media, principal.user, match_id, side)

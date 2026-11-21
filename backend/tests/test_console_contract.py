@@ -1,7 +1,8 @@
 """Console requests: dashboard windows, in_scope on a single case, browser-reachable media links."""
 
 from datetime import timedelta
-from urllib.parse import urlparse
+import uuid
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from pydantic import ValidationError
@@ -231,11 +232,15 @@ def test_media_token_is_not_an_access_token(client, actors, proxy_mode):
     assert client.get(f"{API}/media/{access}").status_code == 404
 
 
-def test_match_photo_url_is_browser_reachable_and_has_no_similarity(client, actors, proxy_mode):
+def _match_with_candidate_photos(client, actors, *, include_left=True, include_right=True):
     mp = create_case(client, actors.police, "missing-persons")
     fp = create_case(client, actors.police, "found-persons")
-    left = _upload(client, actors.police, mp["id"], PNG).json()["id"]
-    right = _upload(client, actors.police, fp["id"], JPEG, name="b.jpg", content_type="image/jpeg").json()["id"]
+    left = _upload(client, actors.police, mp["id"], PNG).json()["id"] if include_left else None
+    right = (
+        _upload(client, actors.police, fp["id"], JPEG, name="b.jpg", content_type="image/jpeg").json()["id"]
+        if include_right
+        else None
+    )
     with SessionLocal() as db:
         match = CaseMatch(
             match_domain=MatchDomain.PERSON, left_case_id=mp["id"], left_case_type=CaseType.MISSING_PERSON,
@@ -246,15 +251,98 @@ def test_match_photo_url_is_browser_reachable_and_has_no_similarity(client, acto
         db.add(match)
         db.commit()
         match_id = str(match.id)
+    return match_id, left, right
 
-    for side, content in (("left", PNG), ("right", JPEG)):
+
+def test_match_photo_url_is_browser_reachable_and_has_no_similarity(client, actors, proxy_mode):
+    match_id, left, right = _match_with_candidate_photos(client, actors)
+
+    for side, attachment_id, content, content_type in (
+        ("left", left, PNG, "image/png"),
+        ("right", right, JPEG, "image/jpeg"),
+    ):
         r = client.get(f"{API}/matches/{match_id}/photos/{side}", headers=actors.police.headers)
         assert r.status_code == 200, r.text
         photo = r.json()
         assert set(photo) == {"side", "attachment_id", "url", "expires_in", "content_type"}
+        assert photo["side"] == side
+        assert photo["attachment_id"] == attachment_id
+        assert photo["content_type"] == content_type
+        assert photo["expires_in"] == 300
         assert "similarity_score" not in photo and "face_similarity" not in photo
         assert urlparse(photo["url"]).netloc == "testserver" and "8333" not in photo["url"]
         assert client.get(urlparse(photo["url"]).path).content == content
+
+
+def test_match_photo_presigned_url_has_exact_300_second_ttl(client, actors):
+    match_id, _, _ = _match_with_candidate_photos(client, actors)
+    response = client.get(
+        f"{API}/matches/{match_id}/photos/left",
+        headers=actors.police.headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    query = parse_qs(urlparse(body["url"]).query)
+    assert body["expires_in"] == 300
+    assert query["X-Amz-Expires"] == ["300"]
+    assert "X-Amz-Signature" in query
+
+
+def test_match_photo_errors_are_authenticated_scoped_and_validated(client, actors):
+    match_id, _, _ = _match_with_candidate_photos(client, actors, include_left=False)
+    assert client.get(f"{API}/matches/{match_id}/photos/left").status_code == 401
+    assert client.get(
+        f"{API}/matches/{match_id}/photos/left",
+        headers=actors.helpdesk.headers,
+    ).status_code == 403
+    missing = client.get(
+        f"{API}/matches/{match_id}/photos/left",
+        headers=actors.police.headers,
+    )
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "attachment_not_found"
+    assert client.get(
+        f"{API}/matches/{uuid.uuid4()}/photos/right",
+        headers=actors.police.headers,
+    ).status_code == 404
+    invalid_id = client.get(
+        f"{API}/matches/not-a-uuid/photos/right",
+        headers=actors.police.headers,
+    )
+    assert invalid_id.status_code == 422
+    assert set(invalid_id.json()["error"]) == {"code", "message", "request_id", "details"}
+    assert client.get(
+        f"{API}/matches/{match_id}/photos/middle",
+        headers=actors.police.headers,
+    ).status_code == 422
+
+
+def test_match_photo_rejects_attachment_from_the_wrong_side(client, actors):
+    match_id, _, right = _match_with_candidate_photos(client, actors)
+    with SessionLocal() as db:
+        match = db.get(CaseMatch, uuid.UUID(match_id))
+        match.left_attachment_id = uuid.UUID(right)
+        db.commit()
+    response = client.get(
+        f"{API}/matches/{match_id}/photos/left",
+        headers=actors.police.headers,
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "attachment_not_available"
+
+
+def test_expired_match_photo_proxy_url_is_rejected(client, actors, proxy_mode, monkeypatch):
+    match_id, _, _ = _match_with_candidate_photos(client, actors)
+    issued_at = utcnow() - timedelta(seconds=301)
+    monkeypatch.setattr("app.storage.media.utcnow", lambda: issued_at)
+    response = client.get(
+        f"{API}/matches/{match_id}/photos/right",
+        headers=actors.police.headers,
+    )
+    assert response.status_code == 200, response.text
+    expired = client.get(urlparse(response.json()["url"]).path)
+    assert expired.status_code == 410
+    assert expired.json()["error"]["code"] == "media_link_expired"
 
 
 def test_direct_links_use_the_declared_public_store_host():

@@ -101,8 +101,14 @@ class RequestGuardMiddleware:
                 self.limiter.check, method, path, client_ip=client_ip, user_id=self._user_id(headers)
             )
             if verdict.status == 429:
+                code = "rate_limit_exceeded" if verdict.policy == "register" else "too_many_requests"
+                message = (
+                    "Too many registration attempts; retry later"
+                    if verdict.policy == "register"
+                    else "Rate limit exceeded; retry later"
+                )
                 await _send_error(
-                    send_with_headers, 429, "too_many_requests", "Rate limit exceeded; retry later", request_id,
+                    send_with_headers, 429, code, message, request_id,
                     extra_headers={"retry-after": str(verdict.retry_after)}, details={"policy": verdict.policy},
                 )
                 return

@@ -171,6 +171,30 @@ def test_non_admin_requires_station(db):
         db.flush()
 
 
+def test_public_mobile_is_unique_across_legacy_and_ten_digit_formats(db):
+    db.add(
+        User(
+            full_name="Legacy Citizen",
+            username="919000000055",
+            phone_number="+919000000055",
+            password_hash="x",
+            role=Role.PUBLIC,
+        )
+    )
+    db.flush()
+    db.add(
+        User(
+            full_name="New Citizen",
+            username="9000000055",
+            phone_number="9000000055",
+            password_hash="x",
+            role=Role.PUBLIC,
+        )
+    )
+    with pytest.raises(IntegrityError, match="uq_users_public_mobile_normalized"):
+        db.flush()
+
+
 def test_failed_create_rolls_back_everything(seed, monkeypatch):
     station, user_id = seed
     with SessionLocal() as db:

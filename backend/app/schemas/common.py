@@ -39,8 +39,8 @@ class Page[T](BaseModel):
 class ErrorBody(BaseModel):
     code: str
     message: str
-    request_id: str | None = None
-    details: Any = None
+    request_id: str
+    details: Any
 
 
 class ErrorResponse(BaseModel):

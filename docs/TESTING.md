@@ -6,11 +6,20 @@ Command, from `backend`, against local Postgres (`TEST_DATABASE_URL` → `kumbh_
 .venv/bin/python -m pytest -q --tb=line
 ```
 
+## Result (2026-11-21, registration profile and requested API contract)
+
+- **378 passed**, **1 skipped** (`test_scanning.py::test_real_clamav_detects_eicar` without `CLAMAV_INTEGRATION_HOST`)
+- Final post-generation auth/OpenAPI regression subset: **54 passed**
+- Coverage added for PUBLIC registration validation/persistence/legacy login, `/auth/me`, normalized DB uniqueness, registration rate limiting, found-person role creation, coordinate concurrency, and match-photo authorization/TTL/expiry
+- Alembic `0013` was tested through downgrade/upgrade, legacy-row preservation, duplicate-mobile rejection, and `alembic check`
+- API documentation validator: **66 examples checked, 0 failed**
+- Schema revision expected: **0013**
+
 ## Result (2026-11-11, PUBLIC accounts + blocked API gaps)
 
 - **290 passed**, **1 skipped** (`test_scanning.py::test_real_clamav_detects_eicar` without `CLAMAV_INTEGRATION_HOST`)
 - New coverage in `backend/tests/test_public_accounts.py`: PUBLIC register/login/me/refresh/logout, ownership/IDOR, forbidden staff routes, forgot/reset password, dashboard `from`/`to`, case `in_scope`/`verification_evidence`, browser-facing presign host
-- Schema revision expected: **0011**
+- Schema revision expected by that build: **0011**
 
 ## Result (2026-11-07, Phase 4 public portal)
 

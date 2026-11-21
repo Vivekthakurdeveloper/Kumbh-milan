@@ -38,6 +38,31 @@ def test_unknown_person_can_be_registered_with_no_identifying_fields(client, act
     assert created["details"]["person_name"] is None
 
 
+@pytest.mark.parametrize("actor_name", ["helpdesk", "police", "admin"])
+def test_found_person_creation_roles(client, actors, actor_name):
+    actor = getattr(actors, actor_name)
+    payload = dict(FOUND_PERSON)
+    if actor_name == "admin":
+        payload["station_id"] = str(actors.station_a)
+    response = client.post(
+        f"{API}/cases/found-persons",
+        json=payload,
+        headers=actor.headers,
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["case_type"] == "FOUND_PERSON"
+
+
+def test_found_person_creation_rejects_unauthorized_station_scope(client, actors):
+    response = client.post(
+        f"{API}/cases/found-persons",
+        json={**FOUND_PERSON, "station_id": str(actors.station_b)},
+        headers=actors.police.headers,
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "station_scope"
+
+
 def test_wrong_type_route_returns_404(client, actors):
     created = create_case(client, actors.helpdesk, "lost-items")
     assert client.get(f"{API}/cases/missing-persons/{created['id']}", headers=actors.helpdesk.headers).status_code == 404

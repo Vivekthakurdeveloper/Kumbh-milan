@@ -1,13 +1,13 @@
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints, field_validator
+from pydantic import EmailStr, Field, StringConstraints, field_validator, model_validator
 
 from app.schemas.admin import UserRead
 from app.schemas.common import StrictModel
 
 MobileUsername = Annotated[
     str,
-    StringConstraints(min_length=10, max_length=15, pattern=r"^[0-9]+$", strip_whitespace=True),
+    StringConstraints(min_length=10, max_length=10, pattern=r"^[0-9]{10}$", strip_whitespace=True),
 ]
 
 
@@ -20,8 +20,14 @@ class RegisterRequest(StrictModel):
     """Citizen self-registration. Role is always PUBLIC and cannot be supplied by the client."""
 
     username: MobileUsername = Field(description="Citizen mobile number used as the login username")
-    password: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
     full_name: str = Field(min_length=2, max_length=200)
+    first_name: str = Field(min_length=1, max_length=100)
+    middle_name: str | None = Field(None, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    phone_number: MobileUsername
+    email: EmailStr | None = None
+    address: str | None = Field(None, max_length=500)
 
     @field_validator("full_name")
     @classmethod
@@ -30,6 +36,12 @@ class RegisterRequest(StrictModel):
         if len(cleaned) < 2:
             raise ValueError("full_name must be at least 2 characters")
         return cleaned
+
+    @model_validator(mode="after")
+    def _mobile_fields_match(self):
+        if self.username != self.phone_number:
+            raise ValueError("username and phone_number must contain the same mobile number")
+        return self
 
 
 class RefreshRequest(StrictModel):

@@ -54,6 +54,10 @@ def _app(settings: Settings, limiter: RateLimiter) -> FastAPI:
     def login():
         return {"ok": True}
 
+    @mini.post("/api/v1/auth/register")
+    def register():
+        return {"ok": True}
+
     @mini.get("/api/v1/ping")
     def ping():
         return {"ok": True}
@@ -95,6 +99,17 @@ def test_login_limited_per_ip_with_retry_after():
         assert limited.json()["error"]["code"] == "too_many_requests"
         assert limited.json()["error"]["details"]["policy"] == "login"
         assert c.get("/api/v1/ping").status_code == 200  # other routes keep their own budget
+
+
+def test_registration_limit_uses_contract_code_and_retry_after():
+    settings = _settings(rate_limit_register_per_minute=2)
+    with TestClient(_app(settings, RateLimiter(settings, MemoryBackend()))) as c:
+        assert [c.post("/api/v1/auth/register").status_code for _ in range(3)] == [200, 200, 429]
+        limited = c.post("/api/v1/auth/register")
+        assert limited.status_code == 429
+        assert int(limited.headers["Retry-After"]) >= 1
+        assert limited.json()["error"]["code"] == "rate_limit_exceeded"
+        assert limited.json()["error"]["details"]["policy"] == "register"
 
 
 def test_users_behind_one_nat_get_separate_budgets():

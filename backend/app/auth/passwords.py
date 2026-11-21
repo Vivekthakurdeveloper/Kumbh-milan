@@ -9,6 +9,7 @@ from app.config import get_settings
 _hasher = PasswordHasher()  # Argon2id with library-recommended parameters
 
 MAX_PASSWORD_LENGTH = 128
+PUBLIC_REGISTRATION_MIN_LENGTH = 8
 
 
 def hash_password(password: str) -> str:
@@ -30,6 +31,17 @@ def needs_rehash(password_hash: str) -> bool:
 def dummy_hash() -> str:
     """Verified against for unknown usernames so response timing does not reveal which accounts exist."""
     return _hasher.hash("kumbh-setu-timing-equaliser")
+
+
+def validate_public_registration_password(password: str) -> None:
+    """Registration-only policy; staff password creation and changes retain the stronger policy below."""
+    if len(password) < PUBLIC_REGISTRATION_MIN_LENGTH:
+        raise ValidationFailed(
+            f"Password must be at least {PUBLIC_REGISTRATION_MIN_LENGTH} characters",
+            code="validation_error",
+        )
+    if len(password) > MAX_PASSWORD_LENGTH:
+        raise ValidationFailed("Password is too long", code="validation_error")
 
 
 def validate_new_password(password: str, *, username: str) -> None:
