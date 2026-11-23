@@ -198,3 +198,30 @@ def test_forgot_and_reset_password_have_their_own_fail_closed_ip_limits():
         "forgot_password", 4, 3600, "ip", True,
     )
     assert (reset.name, reset.limit, reset.key_by, reset.fail_closed) == ("reset_password", 9, "ip", True)
+
+
+@pytest.mark.parametrize("slug", ["missing-persons", "found-persons", "lost-items", "found-items"])
+def test_account_free_case_submissions_use_the_public_submit_limit(slug):
+    from app.ratelimit.policies import build_rules, policies_for
+
+    rules, general = build_rules(_settings(rate_limit_public_submit_per_minute=7))
+    policy = policies_for(rules, general, "POST", f"/api/v1/public/{slug}")[0]
+    assert (policy.name, policy.limit, policy.key_by, policy.fail_closed) == (
+        "public_submit",
+        7,
+        "ip",
+        True,
+    )
+
+
+def test_resumable_attachment_content_uses_upload_limit():
+    from app.ratelimit.policies import build_rules, policies_for
+
+    rules, general = build_rules(_settings(rate_limit_upload_per_minute=11))
+    policy = policies_for(
+        rules,
+        general,
+        "PUT",
+        "/api/v1/sync/attachments/sessions/00000000-0000-0000-0000-000000000000/content",
+    )[0]
+    assert (policy.name, policy.limit, policy.key_by) == ("upload", 11, "user_or_ip")

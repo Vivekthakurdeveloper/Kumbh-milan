@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy import select
 
 from app.database import SessionLocal
@@ -160,6 +162,14 @@ def test_resolve_without_match_requires_verification_evidence(client, actors):
     assert ok.status_code == 200
     desk_view = client.get(f"{API}/cases/{mp['id']}/history", headers=actors.helpdesk.headers).json()
     assert desk_view["status_history"][-1]["verification_evidence"] is None
+    police_view = client.get(f"{API}/cases/{mp['id']}/history", headers=actors.police.headers).json()
+    assert police_view["status_history"][-1]["verification_evidence"] == (
+        "Father identified child at post; Aadhaar matched"
+    )
+    assert client.get(f"{API}/cases/{mp['id']}", headers=actors.helpdesk.headers).json()["verification_evidence"] is None
+    assert client.get(f"{API}/cases/{mp['id']}", headers=actors.police.headers).json()["verification_evidence"] == (
+        "Father identified child at post; Aadhaar matched"
+    )
 
 
 def test_found_item_custody_is_separate_and_gates_resolution(client, actors):
@@ -178,6 +188,16 @@ def test_found_item_custody_is_separate_and_gates_resolution(client, actors):
     )
     assert moved.json()["details"]["custody_status"] == "TRANSFERRED"
     assert moved.json()["status"] == "ASSIGNED"
+    moved_again = client.post(
+        f"{base}/custody",
+        json={
+            "custody_status": "TRANSFERRED",
+            "reason": "Move to station evidence room",
+            "storage_location": "Station 2 evidence locker",
+        },
+        headers=actors.police.headers,
+    )
+    assert moved_again.json()["details"]["storage_location"] == "Station 2 evidence locker"
     released = client.post(
         f"{base}/custody",
         json={"custody_status": "RELEASED", "reason": "Owner verified", "recipient_acknowledgement": "Owner signed the desk register"},
@@ -185,9 +205,73 @@ def test_found_item_custody_is_separate_and_gates_resolution(client, actors):
     )
     assert released.json()["details"]["custody_status"] == "RELEASED"
     assert client.post(f"{base}/custody", json={"custody_status": "IN_CUSTODY", "reason": "Undo"}, headers=actors.police.headers).status_code == 409
+
+    police_history = client.get(f"{API}/cases/{fi['id']}/history", headers=actors.police.headers)
+    assert police_history.status_code == 200
+    custody = police_history.json()["custody_history"]
+    assert [(event["from_status"], event["to_status"]) for event in custody] == [
+        ("IN_CUSTODY", "TRANSFERRED"),
+        ("TRANSFERRED", "TRANSFERRED"),
+        ("TRANSFERRED", "RELEASED"),
+    ]
+    assert [event["reason"] for event in custody] == [
+        "Central store",
+        "Move to station evidence room",
+        "Owner verified",
+    ]
+    assert custody[0]["storage_location"] == "Central lost property"
+    assert custody[0]["handover_acknowledgement_recorded"] is False
+    assert custody[1]["storage_location"] == "Station 2 evidence locker"
+    assert custody[1]["handover_acknowledgement_recorded"] is False
+    assert custody[2]["storage_location"] == "Station 2 evidence locker"
+    assert custody[2]["handover_acknowledgement_recorded"] is True
+    assert all(event["changed_by_user_id"] == str(actors.police.id) for event in custody)
+    assert all(event["user_role"] == "POLICE_OFFICER" for event in custody)
+
+    desk_history = client.get(f"{API}/cases/{fi['id']}/history", headers=actors.helpdesk.headers).json()
+    assert desk_history["custody_history"] == custody
+    assert "Owner signed the desk register" not in str(custody)
+
     ok = _status(client, actors.police, "found-items", fi["id"], status="RESOLVED", reason="Returned",
                  verification_evidence="Owner described the torn strap")
     assert ok.status_code == 200
+
+
+def test_custody_history_keeps_legacy_events_without_inventing_locations(client, actors):
+    case = create_case(client, actors.helpdesk, "found-items")
+    case_id = uuid.UUID(case["id"])
+    with SessionLocal() as db:
+        db.add(
+            AuditEvent(
+                actor_user_id=actors.police.id,
+                action="CUSTODY_CHANGED",
+                entity_type="case",
+                entity_id=case_id,
+                case_id=case_id,
+                case_number=case["case_number"],
+                before_state={"custody_status": "IN_CUSTODY"},
+                after_state={"custody_status": "TRANSFERRED", "storage_location_changed": True},
+                reason="Legacy transfer",
+            )
+        )
+        db.commit()
+
+    history = client.get(f"{API}/cases/{case['id']}/history", headers=actors.police.headers)
+    assert history.status_code == 200
+    assert history.json()["custody_history"] == [
+        {
+            "id": history.json()["custody_history"][0]["id"],
+            "case_id": case["id"],
+            "from_status": "IN_CUSTODY",
+            "to_status": "TRANSFERRED",
+            "storage_location": None,
+            "changed_by_user_id": str(actors.police.id),
+            "user_role": "POLICE_OFFICER",
+            "reason": "Legacy transfer",
+            "handover_acknowledgement_recorded": False,
+            "created_at": history.json()["custody_history"][0]["created_at"],
+        }
+    ]
 
 
 def test_every_change_writes_audit_events(client, actors):
@@ -202,7 +286,66 @@ def test_every_change_writes_audit_events(client, actors):
     assert {"CASE_CREATED", "CASE_UPDATED", "CASE_ASSIGNED", "NOTE_ADDED", "CASE_CLOSED"} <= actions
     update = next(e for e in events if e["action"] == "CASE_UPDATED")
     assert update["after_state"]["changed_fields"] == ["item_description"]
-    assert "has laptop" not in str(events)
+    assert update["after_state"]["field_changes"] == [
+        {"field_name": "item_description", "previous_value": None, "updated_value": "has laptop"}
+    ]
+    assert update["after_state"]["actor_role"] == "HELP_DESK_OPERATOR"
     assert all(e["request_id"] for e in events)
     with SessionLocal() as db:
         assert all(e.case_number == case["case_number"] for e in db.scalars(select(AuditEvent).where(AuditEvent.case_id == case["id"])))
+
+
+def test_field_history_records_real_changes_with_role_and_protects_contact_values(client, actors):
+    case = create_case(
+        client,
+        actors.helpdesk,
+        "missing-persons",
+        {
+            "person_name": "Mohan",
+            "approximate_age": 7,
+            "last_seen_location": "Har Ki Pauri",
+            "contact_details": "Father: +91 90000 00001",
+        },
+    )
+    url = f"{API}/cases/missing-persons/{case['id']}"
+    changed = client.patch(
+        url,
+        json={
+            "person_name": "Mohan Kumar",
+            "approximate_age": 8,
+            "last_seen_location": "Brahmakund",
+            "contact_details": "Father: +91 90000 00002",
+        },
+        headers=actors.helpdesk.headers,
+    )
+    assert changed.status_code == 200, changed.text
+
+    desk_history = client.get(f"{API}/cases/{case['id']}/history", headers=actors.helpdesk.headers).json()
+    changes = desk_history["field_changes"]
+    assert [event["field_name"] for event in changes] == [
+        "person_name",
+        "approximate_age",
+        "last_seen_location",
+        "contact_details",
+    ]
+    assert changes[0]["previous_value"] == "Mohan"
+    assert changes[0]["updated_value"] == "Mohan Kumar"
+    assert changes[1]["previous_value"] == 7 and changes[1]["updated_value"] == 8
+    assert changes[2]["previous_value"] == "Har Ki Pauri"
+    assert changes[2]["updated_value"] == "Brahmakund"
+    assert changes[3]["previous_value"] == changes[3]["updated_value"] == "[REDACTED]"
+    assert all(event["case_id"] == case["id"] for event in changes)
+    assert all(event["updated_by_user_id"] == str(actors.helpdesk.id) for event in changes)
+    assert all(event["user_role"] == "HELP_DESK_OPERATOR" for event in changes)
+    assert all(event["action_type"] == "CASE_UPDATED" and event["timestamp"] for event in changes)
+
+    police_history = client.get(f"{API}/cases/{case['id']}/history", headers=actors.police.headers).json()
+    contact = next(event for event in police_history["field_changes"] if event["field_name"] == "contact_details")
+    assert contact["previous_value"] == "Father: +91 90000 00001"
+    assert contact["updated_value"] == "Father: +91 90000 00002"
+
+    # Sending an unchanged value must not append another audit/history event.
+    no_change = client.patch(url, json={"person_name": "Mohan Kumar"}, headers=actors.helpdesk.headers)
+    assert no_change.status_code == 200
+    again = client.get(f"{API}/cases/{case['id']}/history", headers=actors.police.headers).json()
+    assert again["field_changes"] == police_history["field_changes"]

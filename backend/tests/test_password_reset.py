@@ -91,6 +91,8 @@ def test_reset_by_sms_using_mobile_number(client, actors, outbox):
     assert not email.sent and len(sms.deliveries) == 1
     assert sms.deliveries[0]["to"].endswith("3210")  # recipients are masked in the mock's record
     code = _code(sms.deliveries[0]["body"])
+    assert sms.deliveries[0]["template"] == "PASSWORD_RESET"
+    assert sms.deliveries[0]["extras"] == {"otp": code}
     assert _reset(client, "9876543210", code).status_code == 204
     assert client.post(f"{API}/auth/login", json={"username": "helpdesk", "password": NEW_PASSWORD}).status_code == 200
 

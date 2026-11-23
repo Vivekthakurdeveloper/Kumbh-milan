@@ -173,7 +173,52 @@ def test_patch_updates_details_and_rejects_closed_cases(client, actors):
     assert closed.status_code == 409 and closed.json()["error"]["code"] == "case_closed"
 
 
-def test_required_item_fields_cannot_be_cleared(client, actors):
-    case = create_case(client, actors.helpdesk, "lost-items")
-    r = client.patch(f"{API}/cases/lost-items/{case['id']}", headers=actors.helpdesk.headers, json={"item_name": None})
-    assert r.status_code == 422
+@pytest.mark.parametrize(
+    "kind,field,initial",
+    [
+        ("missing-persons", "person_name", "Mohan"),
+        ("lost-items", "item_name", LOST_ITEM["item_name"]),
+        ("found-items", "item_name", FOUND_ITEM["item_name"]),
+    ],
+)
+@pytest.mark.parametrize("invalid", [None, "", "   "])
+def test_required_case_names_cannot_be_cleared(client, actors, kind, field, initial, invalid):
+    payload = None
+    if kind == "missing-persons":
+        payload = {**MISSING_PERSON, "person_name": initial}
+    case = create_case(client, actors.helpdesk, kind, payload)
+
+    response = client.patch(
+        f"{API}/cases/{kind}/{case['id']}",
+        headers=actors.helpdesk.headers,
+        json={field: invalid},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == {
+        "code": "validation_error",
+        "message": "Enter a valid value.",
+        "request_id": response.headers["X-Request-ID"],
+        "details": {"field": field, "reason": "blank_or_null"},
+    }
+    unchanged = client.get(f"{API}/cases/{kind}/{case['id']}", headers=actors.helpdesk.headers).json()
+    assert unchanged["details"][field] == initial
+
+
+@pytest.mark.parametrize(
+    "kind,payload,patch,field",
+    [
+        ("missing-persons", {**MISSING_PERSON, "person_name": "Mohan"}, {"approximate_age": 8}, "person_name"),
+        ("lost-items", LOST_ITEM, {"item_description": "Contains school books"}, "item_name"),
+        ("found-items", FOUND_ITEM, {"item_description": "Collected after bathing hours"}, "item_name"),
+    ],
+)
+def test_patch_omitting_required_name_preserves_it(client, actors, kind, payload, patch, field):
+    case = create_case(client, actors.helpdesk, kind, payload)
+    response = client.patch(
+        f"{API}/cases/{kind}/{case['id']}",
+        headers=actors.helpdesk.headers,
+        json=patch,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["details"][field] == case["details"][field]

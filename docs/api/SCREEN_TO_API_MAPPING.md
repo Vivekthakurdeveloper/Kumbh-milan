@@ -128,8 +128,8 @@ Totals: 12 Ready, 8 Partial, 2 Blocked.
 | Form fields | Note: `note_text`, `note_type`, `is_sensitive` (PO/AD), `corrects_note_id` (for CORRECTION). Reveal: `reason_code`, optional `note` (≤200). Delete attachment: `reason` (3–2000). |
 | Data deps | User names for reporter, assignee, note authors via `GET /users/directory?ids=…` |
 | UI states | 404 "not found or not available to you"; `has_contact_details` controls the reveal button; sensitive notes and evidence fields are `null` for HD |
-| Missing APIs | Custody history not visible to non-admins (G-7). |
-| Readiness | **Ready** (core case details); custody history remains a gap |
+| Missing APIs | A unified notes/media activity timeline remains open (G-22). |
+| Readiness | **Ready** for core details and custody history |
 
 ## 7. Edit case
 
@@ -198,24 +198,24 @@ Totals: 12 Ready, 8 Partial, 2 Blocked.
 | Aspect | Detail |
 |---|---|
 | Roles | PO, AD |
-| APIs | Confirm match (10), then `POST /cases/{type}/{id}/status` → `RESOLVED` with `match_id` or `verification_evidence`; `POST /cases/{id}/contact/reveal` (`reason_code: CARE_HANDOVER`); optional family message `POST /cases/{id}/notifications` (blocked, see 16); notes for details |
-| Actions | Verify identity, record evidence, resolve both cases |
-| Form fields | `verification_evidence` text; no structured claimant fields |
-| Missing APIs | No claimant/collector record (name, relationship, ID document type/number, signature or photo, handover time) and no reunification entity tying both cases (G-2). Evidence lives in free text. |
-| Readiness | **Partial** |
+| APIs | Confirm match (10); create/list/detail structured records under `/cases/{id}/handovers`; verify/reject and complete; read `/history`; then `POST /cases/{type}/{id}/status` → `RESOLVED`. Contact reveal and optional family messaging remain separate. |
+| Actions | Record claimant and optional witness, verify/reject identity, complete physical handover, inspect audit history, resolve both cases |
+| Form fields | Claimant name/relationship/mobile/address, document type/reference, optional witness, verification method/evidence, handover location/time, acknowledgement |
+| Missing APIs | — |
+| Readiness | **Backend implemented in worktree**; migration regression and client rollout are pending before enabling `HANDOVER_REQUIRED_FOR_RESOLVE` |
 
 ## 13. Found-item custody
 
 | Aspect | Detail |
 |---|---|
 | Roles | View: all. Change: PO, AD (`case:custody_update`) |
-| APIs | `POST /cases/found-items/{id}/custody`; then status `RESOLVED` once `RELEASED` |
+| APIs | `POST /cases/found-items/{id}/custody`, `GET /cases/{id}/history` (`custody_history`); then status `RESOLVED` once `RELEASED` |
 | Actions | Transfer to a storage location; release to owner |
 | Form fields | `custody_status`, `storage_location` (required for TRANSFERRED), `recipient_acknowledgement` (required for RELEASED, 10–500), `reason` (required, 3–2000). No `expected_version` on this request. |
 | Data deps | Current `details.custody_status` |
 | UI states | `409 invalid_custody_transition` (RELEASED is terminal), `case_closed`; `422 storage_location_required`, `handover_required` |
-| Missing APIs | Custody chain history for non-admins (G-7); structured claimant record (G-2). |
-| Readiness | **Partial** |
+| Missing APIs | — |
+| Readiness | **Backend implemented in worktree**; database regression pending |
 
 ## 14. Global search
 
@@ -263,7 +263,7 @@ Totals: 12 Ready, 8 Partial, 2 Blocked.
 |---|---|
 | Roles | All (scoped) |
 | APIs | `GET /reports/cases.csv?created_from=&created_to=` (no other filters) |
-| UI states | `422 invalid_range`, `range_too_large` (>31 days); truncated at 1000 rows; archived cases excluded. `X-Export-Truncated` and filename are unreadable cross-origin (G-16): deploy same-origin or always warn. |
+| UI states | `422 invalid_range`, `range_too_large` (>31 days); truncated at 1000 rows; archived cases excluded. Approved browser origins can read `X-Export-Truncated`, `X-Export-Rows`, and the filename. |
 | Missing APIs | Other report types, aggregates, PDF, scheduled reports (G-21). |
 | Readiness | **Partial** |
 
@@ -273,7 +273,7 @@ Totals: 12 Ready, 8 Partial, 2 Blocked.
 |---|---|
 | Roles | AD only (`audit:read`) |
 | APIs | `GET /audit-events` (filters per reference §12) |
-| Missing APIs | A per-case activity timeline for PO/HD beyond `/history` (G-22). Do not expose this screen to other roles. |
+| Missing APIs | A per-case activity timeline for PO/HD that also includes approved note/media events beyond `/history` (G-22). Do not expose this screen to other roles. |
 | Readiness | **Partial** (admin screen ready; non-admin timeline missing) |
 
 ## 20. User management

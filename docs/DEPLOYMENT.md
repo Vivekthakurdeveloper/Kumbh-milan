@@ -7,7 +7,7 @@ No cloud account was used and no deployment was performed.
 1. Copy `.env.example` to `.env` and replace placeholders. Do not commit `.env`.
 2. `docker compose up -d postgres redis objectstore` starts dependencies. The API image does not migrate on startup.
 3. Back up with `ops/backup-volumes.sh` before the first migration of a volume that already has data.
-4. `docker compose --profile ops run --rm migrate` upgrades the database in that Compose project. This build expects revision `0013`. Do not point migrate at the operational volume until the upgrade has passed on a restored copy and the upgrade plan is approved.
+4. `docker compose --profile ops run --rm migrate` upgrades the database in that Compose project. This build expects revision `0016`. Do not point migrate at the operational volume until the upgrade has passed on a restored copy and the upgrade plan is approved.
 5. `docker compose up -d --build api` builds the Python 3.12 image and starts the API.
 6. `docker compose --profile workers up -d scan-worker notifications-worker maintenance-worker` starts workers.
 

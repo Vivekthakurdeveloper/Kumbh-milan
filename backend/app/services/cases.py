@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -30,6 +31,13 @@ POSITION_FIELDS = ("location_id", "latitude", "longitude", "coordinate_source", 
 SYNC_FIELDS = ("client_id", "device_id", "client_record_id", "client_created_at")
 ENVELOPE_FIELDS = frozenset({"urgency_level", "station_id", "contact_details", *POSITION_FIELDS, *SYNC_FIELDS})
 _UNSET = object()
+_ENCRYPTED_HISTORY_FIELDS: dict[str, Permission] = {
+    # Contact values are otherwise encrypted at rest and precise historical coordinates
+    # should not become plaintext in the append-only audit store.
+    "contact_details": Permission.CONTACT_READ,
+    "latitude": Permission.NOTE_SENSITIVE,
+    "longitude": Permission.NOTE_SENSITIVE,
+}
 
 
 def find_case_by_client_record(
@@ -124,17 +132,58 @@ def _apply_position(db: Session, case: Case, data: dict[str, Any]) -> dict[str, 
     return changes
 
 
-def _set_contact(db: Session, case: Case, user: User, contact: str | None) -> None:
+def _set_contact(db: Session, case: Case, user: User, contact: str | None) -> tuple[bool, str | None, str | None]:
     existing = db.get(CaseContact, case.id)
+    previous = decrypt_text(existing.contact_ciphertext) if existing is not None else None
+    if previous == contact:
+        return False, previous, contact
     if contact is None:
         if existing is not None:
             db.delete(existing)
-        return
+        return True, previous, None
     if existing is None:
         db.add(CaseContact(case_id=case.id, contact_ciphertext=encrypt_text(contact), updated_by_user_id=user.id))
     else:
         existing.contact_ciphertext = encrypt_text(contact)
         existing.updated_by_user_id = user.id
+    return True, previous, contact
+
+
+def _history_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    return encrypt_text(json.dumps(value, default=str, ensure_ascii=False, separators=(",", ":")))
+
+
+def _field_change(field_name: str, previous: Any, updated: Any) -> dict[str, Any]:
+    permission = _ENCRYPTED_HISTORY_FIELDS.get(field_name)
+    if permission is None:
+        return {
+            "field_name": field_name,
+            "previous_value": previous,
+            "updated_value": updated,
+        }
+    return {
+        "field_name": field_name,
+        "previous_value": _history_value(previous),
+        "updated_value": _history_value(updated),
+        "value_encoding": "fernet-json",
+        "read_permission": permission.value,
+    }
+
+
+def _validate_explicit_name(spec: CaseTypeSpec, values: dict[str, Any]) -> None:
+    """Unknown names are valid on create; an explicit PATCH must not erase a known name."""
+    field_name = spec.title_field
+    if field_name not in ("person_name", "item_name") or field_name not in values:
+        return
+    value = values[field_name]
+    if value is None or not str(value).strip():
+        raise ValidationFailed(
+            "Enter a valid value.",
+            code="validation_error",
+            details={"field": field_name, "reason": "blank_or_null"},
+        )
 
 
 def _set_public_contact(db: Session, case: Case, contact: dict[str, Any]) -> None:
@@ -327,6 +376,7 @@ def update_case(
             raise Conflict(
                 f"{case.status.title()} cases cannot be edited; reopen the case first", code="case_closed"
             )
+        _validate_explicit_name(spec, local)
 
         contact = local.pop("contact_details", _UNSET)
         urgency = local.pop("urgency_level", _UNSET)
@@ -337,25 +387,33 @@ def update_case(
 
         before: dict[str, Any] = {}
         after: dict[str, Any] = {}
+        field_changes: list[dict[str, Any]] = []
         changed_fields = []
         for name, value in local.items():
-            if getattr(detail, name) != value:
+            previous = getattr(detail, name)
+            if previous != value:
+                field_changes.append(_field_change(name, previous, value))
                 setattr(detail, name, value)
                 changed_fields.append(name)
         if urgency is not _UNSET and urgency != case.urgency_level:
             before["urgency_level"], after["urgency_level"] = case.urgency_level, urgency
+            field_changes.append(_field_change("urgency_level", case.urgency_level, urgency))
             case.urgency_level = urgency
+        contact_changed = False
         if contact is not _UNSET:
-            _set_contact(db, case, user, contact)
-            after["contact_details_changed"] = True
+            contact_changed, previous_contact, updated_contact = _set_contact(db, case, user, contact)
+            if contact_changed:
+                field_changes.append(_field_change("contact_details", previous_contact, updated_contact))
+                after["contact_details_changed"] = True
 
         if position_changes:
             for key, (old, new) in position_changes.items():
+                field_changes.append(_field_change(key, old, new))
                 if key in ("latitude", "longitude"):
                     after["coordinates_changed"] = True
                 else:
                     before[key], after[key] = old, new
-        if not (changed_fields or before or after or contact is not _UNSET):
+        if not field_changes:
             db.commit()
             return
         if changed_fields:
@@ -364,12 +422,14 @@ def update_case(
                     raise ValidationFailed(f"{name} cannot be cleared", code="required_field")
             case.search_text = _build_search_text(case.case_number, spec, detail)
             after["changed_fields"] = sorted(changed_fields)
+        after["field_changes"] = field_changes
+        after["actor_role"] = Role(user.role).value
         case.updated_at = func.now()
         record_audit(
             db, action=AuditAction.CASE_UPDATED, entity_type="case", entity_id=case.id, actor_user_id=user.id,
             case=case, before=before or None, after=after,
         )
-        if contact is not _UNSET:
+        if contact_changed:
             record_audit(
                 db, action=AuditAction.CONTACT_UPDATED, entity_type="case_contact", entity_id=case.id,
                 actor_user_id=user.id, case=case, after={"cleared": contact is None},

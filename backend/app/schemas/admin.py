@@ -73,6 +73,7 @@ class UserRead(ReadModel):
     phone_number: str | None
     address: str | None
     role: Role
+    role_label: str
     police_badge_number: str | None
     station_id: uuid.UUID | None
     is_active: bool
@@ -88,6 +89,7 @@ class OfficerSummary(ReadModel):
     full_name: str
     username: str
     role: Role
+    role_label: str
     police_badge_number: str | None
     station_id: uuid.UUID | None
 
@@ -98,4 +100,5 @@ class UserDirectoryEntry(ReadModel):
     id: uuid.UUID
     full_name: str
     role: Role
+    role_label: str
     station_id: uuid.UUID | None

@@ -22,6 +22,8 @@ class Permission(StrEnum):
     CASE_RESOLVE = "case:resolve"  # MATCH_FOUND, RESOLVED, CLOSED, REOPENED
     CUSTODY_UPDATE = "case:custody_update"
     CONTACT_READ = "case:contact_read"
+    HANDOVER_READ = "handover:read"
+    HANDOVER_MANAGE = "handover:manage"
 
     NOTE_CREATE = "note:create"
     NOTE_SENSITIVE = "note:sensitive"
@@ -61,6 +63,8 @@ _POLICE = _HELP_DESK | frozenset(
         Permission.CASE_RESOLVE,
         Permission.CUSTODY_UPDATE,
         Permission.CONTACT_READ,
+        Permission.HANDOVER_READ,
+        Permission.HANDOVER_MANAGE,
         Permission.NOTE_SENSITIVE,
         Permission.ATTACHMENT_DELETE,
         Permission.MATCH_REVIEW,

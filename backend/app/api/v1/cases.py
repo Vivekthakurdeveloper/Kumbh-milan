@@ -18,6 +18,13 @@ from app.schemas.cases import (
 )
 from app.schemas.common import Page, PageParams
 from app.schemas.geo import CaseMap, NearbyCase
+from app.schemas.handover import (
+    HandoverCompleteRequest,
+    HandoverCreateRequest,
+    HandoverHistoryEventRead,
+    HandoverRead,
+    HandoverVerifyRequest,
+)
 from app.schemas.notifications import NotificationCreate, NotificationRead
 from app.schemas.public import PublicReviewRequest
 from app.schemas.workflow import (
@@ -41,6 +48,7 @@ from app.schemas.workflow import (
 from app.services import attachments as attachment_service
 from app.services import cases as case_service
 from app.services import geo as geo_service
+from app.services import handovers as handover_service
 from app.services import matching as matching_service
 from app.services import notifications as notification_service
 from app.services import public_cases as public_case_service
@@ -311,6 +319,133 @@ def reveal_contact(case_id: uuid.UUID, payload: ContactRevealRequest, principal:
 def public_review(case_id: uuid.UUID, payload: PublicReviewRequest, principal: CurrentPrincipal, db: DbSession):
     case = public_case_service.review_public_case(db, principal.user, case_id, payload)
     return case_service.to_read(db, case, actor=principal.user)
+
+
+@shared.post(
+    "/{case_id}/handovers",
+    response_model=HandoverRead,
+    status_code=status.HTTP_201_CREATED,
+    responses={**STATE, **errors(422)},
+    summary="Record a claimant and open a structured handover (police/admin)",
+)
+def create_handover(
+    case_id: uuid.UUID,
+    payload: HandoverCreateRequest,
+    principal: CurrentPrincipal,
+    db: DbSession,
+    response: Response,
+    idempotency_key: IdempotencyKey = None,
+):
+    row, replayed = handover_service.create_handover(
+        db,
+        principal.user,
+        case_id,
+        payload,
+        idempotency_key=idempotency_key,
+    )
+    _mark_replay(response, replayed)
+    if replayed:
+        response.status_code = status.HTTP_200_OK
+    return handover_service.to_read(row)
+
+
+@shared.get(
+    "/{case_id}/handovers",
+    response_model=list[HandoverRead],
+    responses=NOT_FOUND,
+    summary="List structured handovers linked to a case (police/admin)",
+)
+def list_handovers(case_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession):
+    return [
+        handover_service.to_read(row)
+        for row in handover_service.list_handovers(db, principal.user, case_id)
+    ]
+
+
+@shared.get(
+    "/{case_id}/handovers/{handover_id}",
+    response_model=HandoverRead,
+    responses=NOT_FOUND,
+    summary="Get structured claimant verification and handover details",
+)
+def get_handover(
+    case_id: uuid.UUID,
+    handover_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    db: DbSession,
+):
+    return handover_service.to_read(
+        handover_service.get_handover(db, principal.user, case_id, handover_id)
+    )
+
+
+@shared.post(
+    "/{case_id}/handovers/{handover_id}/verify",
+    response_model=HandoverRead,
+    responses={**STATE, **errors(422)},
+    summary="Verify or reject a structured claimant handover",
+)
+def verify_handover(
+    case_id: uuid.UUID,
+    handover_id: uuid.UUID,
+    payload: HandoverVerifyRequest,
+    principal: CurrentPrincipal,
+    db: DbSession,
+    response: Response,
+    idempotency_key: IdempotencyKey = None,
+):
+    row, replayed = handover_service.verify_handover(
+        db,
+        principal.user,
+        case_id,
+        handover_id,
+        payload,
+        idempotency_key=idempotency_key,
+    )
+    _mark_replay(response, replayed)
+    return handover_service.to_read(row)
+
+
+@shared.post(
+    "/{case_id}/handovers/{handover_id}/complete",
+    response_model=HandoverRead,
+    responses={**STATE, **errors(422)},
+    summary="Complete a verified physical handover",
+)
+def complete_handover(
+    case_id: uuid.UUID,
+    handover_id: uuid.UUID,
+    payload: HandoverCompleteRequest,
+    principal: CurrentPrincipal,
+    db: DbSession,
+    response: Response,
+    idempotency_key: IdempotencyKey = None,
+):
+    row, replayed = handover_service.complete_handover(
+        db,
+        principal.user,
+        case_id,
+        handover_id,
+        payload,
+        idempotency_key=idempotency_key,
+    )
+    _mark_replay(response, replayed)
+    return handover_service.to_read(row)
+
+
+@shared.get(
+    "/{case_id}/handovers/{handover_id}/history",
+    response_model=list[HandoverHistoryEventRead],
+    responses=NOT_FOUND,
+    summary="Get append-only handover lifecycle history",
+)
+def handover_history(
+    case_id: uuid.UUID,
+    handover_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    db: DbSession,
+):
+    return handover_service.handover_history(db, principal.user, case_id, handover_id)
 
 
 @shared.get("/{case_id}/notes", response_model=Page[NoteRead], responses=NOT_FOUND)

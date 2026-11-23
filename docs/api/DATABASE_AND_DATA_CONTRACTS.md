@@ -1,6 +1,6 @@
 # Database and data contracts
 
-Source of truth: `backend/app/models/*.py`, `backend/app/schemas/*.py`, and Alembic revisions `0001`–`0013` in `backend/alembic/versions/`. Everything in sections 1–6 exists in the schema. Section 7 lists entities the frontend may expect that **do not exist**.
+Source of truth: `backend/app/models/*.py`, `backend/app/schemas/*.py`, and Alembic revisions `0001`–`0016` in `backend/alembic/versions/`. Everything in sections 1–6 exists in the schema. Section 7 lists entities the frontend may expect that **do not exist**.
 
 ## 1. Conventions
 
@@ -36,6 +36,8 @@ erDiagram
     cases ||--o| case_contacts : "encrypted contact"
     cases ||--o{ case_assignments : "history"
     cases ||--o{ case_status_history : "history"
+    cases ||--o{ case_handovers : "primary / counterpart"
+    case_matches ||--o{ case_handovers : "confirmed match"
     cases ||--o{ case_notes : ""
     cases ||--o{ case_attachments : ""
     cases ||--o{ case_matches : "left (MP/LI) or right (FP/FI)"
@@ -212,6 +214,26 @@ There is no "unassign" operation; a case can only be reassigned to another offic
 | `match_id` | uuid, nullable | Confirmed match supporting `MATCH_FOUND`/`RESOLVED`. |
 | `created_at` | datetime | |
 
+### 3.7b `case_handovers`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | uuid | Structured handover id. |
+| `primary_case_id`, `counterpart_case_id` | uuid | The route case and optional confirmed-match counterpart. |
+| `match_id` | uuid, nullable | Required for person reunification; optional for a match-less found-item return. |
+| `kind` | `HandoverKind` | `PERSON_REUNIFICATION` or `ITEM_RETURN`. |
+| `status` | `HandoverStatus` | `CLAIMANT_RECORDED`, `VERIFIED`, `COMPLETED`, or `REJECTED`. |
+| claimant / witness payloads | Fernet ciphertext | Names, mobile, address, document reference, relationship, and witness statement. Never stored in audit JSON. |
+| `evidence_attachment_ids` | JSON array of uuid | Up to ten downloadable case attachments validated against the linked cases. |
+| `identity_document_type` | `IdentityDocumentType`, nullable | The document category only; its reference is encrypted. |
+| verification / acknowledgement / rejection | Fernet ciphertext | Sensitive evidence and reasons. |
+| actor and lifecycle timestamps | uuid / datetime | Creator, verifier, completer/rejecter, physical handover time. |
+| `handover_location` | string ≤500, nullable | Cleared during approved anonymisation. |
+| `version` | int | Optimistic concurrency for verify/complete operations. |
+| `anonymized_at` | datetime, nullable | Sensitive ciphertext has been cleared by retention. |
+
+Only police/admin roles have `handover:read` and `handover:manage`. Partial unique indexes prevent concurrent active sessions and duplicate completed handovers. The runtime database role cannot delete rows.
+
 ### 3.8 `case_notes` (append-only)
 
 | Field | Type | Notes |
@@ -309,7 +331,7 @@ Constraints: one row per `(left_case_id, right_case_id)` pair in any status (rej
 | `entity_type` | string | e.g. `case`, `case_note`, `case_attachment`, `case_match`, `case_contact`, `user`, `session`, `station`, `location`, `notification`, `legal_hold`, `retention_run`, `report`. |
 | `entity_id` | uuid, nullable | |
 | `case_id`, `case_number` | nullable | |
-| `before_state`, `after_state` | object, nullable | Redacted at write time (passwords, tokens, contact details, storage keys become `"[REDACTED]"`). Exact coordinates are not recorded. |
+| `before_state`, `after_state` | object, nullable | Redacted at write time. `CASE_UPDATED.after_state.field_changes` carries actual-change deltas and the actor role. Historical contact and precise coordinate values are Fernet ciphertext and are decrypted only by the role-gated case-history API. |
 | `reason` | string, nullable | |
 | `request_id` | string, nullable | Matches the `X-Request-ID` response header. |
 | `client_ip` | string, nullable | |
@@ -323,13 +345,13 @@ Constraints: one row per `(left_case_id, right_case_id)` pair in any status (rej
 
 ### 3.15 Internal tables (no API)
 
-`refresh_tokens` (sessions), `login_attempts`, `idempotency_keys`, `case_number_counters`, `worker_heartbeats`.
+`refresh_tokens` (sessions), `login_attempts`, `idempotency_keys`, `case_number_counters`, `worker_heartbeats`, `sync_devices`, `sync_delivered_cases`, append-only `sync_tombstones`, and `attachment_upload_sessions`.
 
 ## 4. Enumerations (exact values)
 
 | Enum | Values |
 |---|---|
-| `Role` | `ADMIN`, `POLICE_OFFICER`, `HELP_DESK_OPERATOR` |
+| `Role` | `ADMIN`, `POLICE_OFFICER`, `HELP_DESK_OPERATOR`, `PUBLIC` |
 | `StationKind` | `POLICE_STATION`, `HELP_DESK` |
 | `CaseType` | `MISSING_PERSON`, `FOUND_PERSON`, `LOST_ITEM`, `FOUND_ITEM` |
 | `CaseStatus` | `OPEN`, `UNDER_REVIEW`, `ASSIGNED`, `MATCH_FOUND`, `RESOLVED`, `CLOSED`, `REOPENED` |
@@ -459,11 +481,7 @@ These are **not in the schema**. They are recorded as gaps in [API_GAP_ANALYSIS.
 |---|---|
 | Volunteer or supervisor role | None. Only three roles. |
 | Item category reference table | Free-text `item_category`. |
-| Claimant / owner verification record | `verification_evidence` on the status change and `recipient_acknowledgement` on release (free text). |
-| Reunification / handover record for persons | `RESOLVED` status-history row with `match_id` and/or `verification_evidence`. |
-| Custody transfer history table | `CUSTODY_CHANGED` audit events (readable only by admins). Only the current `custody_status` and `storage_location` are on the case. |
 | Structured guardian/family contact | One encrypted free-text `contact_details`. |
 | Registration source (walk-in, phone, etc.) | None. Only `reported_by_user_id` and `station_id`. |
 | Team / unit | None. Assignment is to an individual officer. |
-| In-app notification inbox for staff | None. |
 | Configurable system settings | None via API (environment variables only). |

@@ -177,6 +177,20 @@ def test_updating_and_clearing_coordinates_keeps_them_out_of_audit(client, actor
     assert events and all("29.958" not in str(e.after_state) for e in events)
     assert any((e.after_state or {}).get("coordinates_changed") for e in events)
 
+    desk_history = client.get(f"{API}/cases/{case['id']}/history", headers=actors.helpdesk.headers).json()
+    desk_coordinates = [
+        event for event in desk_history["field_changes"] if event["field_name"] in ("latitude", "longitude")
+    ]
+    assert desk_coordinates
+    assert all(
+        event["previous_value"] == "[REDACTED]" or event["updated_value"] == "[REDACTED]"
+        for event in desk_coordinates
+    )
+    police_history = client.get(f"{API}/cases/{case['id']}/history", headers=actors.police.headers).json()
+    latitude_changes = [event for event in police_history["field_changes"] if event["field_name"] == "latitude"]
+    assert latitude_changes[0]["updated_value"] == NEAR_HKP[0]
+    assert latitude_changes[-1]["previous_value"] == NEAR_HKP[0] and latitude_changes[-1]["updated_value"] is None
+
 
 def test_found_person_coordinate_update_checks_version_and_preserves_details(client, actors):
     case = create_case(

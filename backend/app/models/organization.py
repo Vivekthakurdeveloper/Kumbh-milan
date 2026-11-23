@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
-from app.models.enums import Role, StationKind, enum_type
+from app.models.enums import Role, StationKind, enum_type, role_label
 from app.models.mixins import TimestampMixin, uuid_pk
 
 
@@ -62,3 +62,7 @@ class User(TimestampMixin, Base):
     totp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
 
     station: Mapped[Station | None] = relationship(back_populates="users")
+
+    @property
+    def role_label(self) -> str:
+        return role_label(self.role)

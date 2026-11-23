@@ -90,16 +90,27 @@ def _public_report(**overrides):
     return body
 
 
-def _submit_missing(client, token, report=None, key="public-submit-1", photo=False):
-    data = {"report": json.dumps(report or _public_report())}
+def _submit_public_case(client, token, slug, report, key="public-submit-1", photo=False):
+    data = {"report": json.dumps(report)}
     files = None
     if photo:
         files = {"photo": ("face.jpg", io.BytesIO(TINY_JPEG), "image/jpeg")}
     return client.post(
-        f"{API}/public/missing-persons",
+        f"{API}/public/{slug}",
         data=data,
         files=files,
         headers={"X-Verified-Mobile-Token": token, "Idempotency-Key": key},
+    )
+
+
+def _submit_missing(client, token, report=None, key="public-submit-1", photo=False):
+    return _submit_public_case(
+        client,
+        token,
+        "missing-persons",
+        report or _public_report(),
+        key=key,
+        photo=photo,
     )
 
 
@@ -116,6 +127,121 @@ def test_public_missing_person_submission_success(client, actors):
         assert case.public_review_status == PublicReviewStatus.PENDING_VERIFICATION
         queued = db.scalars(select(Notification).where(Notification.case_id == case.id)).all()
         assert any(n.template == NotificationTemplate.CASE_SUBMITTED for n in queued)
+
+
+@pytest.mark.parametrize(
+    "slug,case_type,report,detail_field,expected_value",
+    [
+        (
+            "found-persons",
+            "FOUND_PERSON",
+            {
+                "physical_description": "Adult wearing a blue shawl",
+                "approximate_age": 45,
+                "estimated_gender": "FEMALE",
+                "found_location": "Har Ki Pauri help desk",
+                "found_at": "2026-11-07T10:30:00+05:30",
+                "current_care_location": "Har Ki Pauri help desk",
+                "reporter_name": "Ramesh",
+                "reporter_mobile_number": "9876543210",
+            },
+            "physical_description",
+            "Adult wearing a blue shawl",
+        ),
+        (
+            "lost-items",
+            "LOST_ITEM",
+            {
+                "item_category": "BAG",
+                "item_name": "Black backpack",
+                "item_description": "Black backpack containing clothes",
+                "identifying_features": "Orange thread tied to handle",
+                "last_seen_location": "Railway station",
+                "last_seen_at": "2026-11-07T09:00:00+05:30",
+                "reporter_name": "Ramesh",
+                "reporter_mobile_number": "9876543210",
+            },
+            "item_name",
+            "Black backpack",
+        ),
+        (
+            "found-items",
+            "FOUND_ITEM",
+            {
+                "item_category": "PHONE",
+                "item_name": "Blue mobile phone",
+                "item_description": "Phone with a cracked corner",
+                "found_location": "Ghat 2",
+                "found_at": "2026-11-07T11:00:00+05:30",
+                "storage_location": "Har Ki Pauri help desk locker",
+                "reporter_name": "Ramesh",
+                "reporter_mobile_number": "9876543210",
+            },
+            "storage_location",
+            "Har Ki Pauri help desk locker",
+        ),
+    ],
+)
+def test_account_free_submission_supports_remaining_case_types(
+    client, actors, slug, case_type, report, detail_field, expected_value
+):
+    token = _verify_mobile(client)
+    key = f"public-{slug}"
+    response = _submit_public_case(client, token, slug, report, key=key, photo=True)
+    assert response.status_code == 201, response.text
+    ack = response.json()
+    assert ack["status"] == "PENDING_VERIFICATION"
+    replay = _submit_public_case(client, token, slug, report, key=key)
+    assert replay.status_code == 200
+    assert replay.headers["Idempotent-Replayed"] == "true"
+    assert replay.json()["case_id"] == ack["case_id"]
+
+    with SessionLocal() as db:
+        case = db.scalar(select(Case).where(Case.case_number == ack["case_id"]))
+        assert case is not None
+        assert case.case_type == case_type
+        assert case.source == "PUBLIC"
+        assert case.public_review_status == PublicReviewStatus.PENDING_VERIFICATION
+        case_id = case.id
+
+    detail = client.get(f"{API}/cases/{slug}/{case_id}", headers=actors.helpdesk.headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["details"][detail_field] == expected_value
+    assert client.get(f"{API}/cases/{case_id}/attachments", headers=actors.helpdesk.headers).json()["total"] == 1
+
+    reviewed = client.post(
+        f"{API}/cases/{case_id}/public-review",
+        json={"decision": "VERIFIED", "reason": "Submission checked at intake desk"},
+        headers=actors.helpdesk.headers,
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["public_review_status"] == "VERIFIED"
+
+
+def test_account_free_case_can_be_rejected_by_intake_staff(client, actors):
+    token = _verify_mobile(client)
+    report = {
+        "item_category": "BAG",
+        "item_name": "Unverified bag report",
+        "item_description": "Reporter could not identify the contents",
+        "last_seen_location": "Bus station",
+        "last_seen_at": "2026-11-07T09:00:00+05:30",
+        "reporter_name": "Ramesh",
+        "reporter_mobile_number": "9876543210",
+    }
+    submitted = _submit_public_case(client, token, "lost-items", report, key="public-reject-lost")
+    assert submitted.status_code == 201
+    with SessionLocal() as db:
+        case = db.scalar(select(Case).where(Case.case_number == submitted.json()["case_id"]))
+        case_id = case.id
+
+    rejected = client.post(
+        f"{API}/cases/{case_id}/public-review",
+        json={"decision": "REJECTED", "reason": "Reporter could not verify identifying details"},
+        headers=actors.helpdesk.headers,
+    )
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["public_review_status"] == "REJECTED"
 
 
 def test_public_missing_person_missing_fields(client, actors):

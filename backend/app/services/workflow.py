@@ -1,5 +1,6 @@
 """Assignment, status, custody, notes, matches, history. Shared by all four case types."""
 
+import json
 import uuid
 from datetime import datetime
 
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.audit import AuditAction, record_audit
 from app.auth.permissions import Permission, has_permission, require_permission
 from app.auth.scope import case_visibility_clause
+from app.common.crypto import decrypt_text
 from app.common.errors import Conflict, Forbidden, InvalidTransition, NotFound, ValidationFailed
 from app.common.time import utcnow
 from app.models import AuditEvent, Case, CaseAssignment, CaseMatch, CaseNote, CaseStatusHistory, IdempotencyKey, User
@@ -33,6 +35,8 @@ from app.schemas.workflow import (
     AssignRequest,
     CaseHistory,
     CustodyChangeRequest,
+    CustodyHistoryRead,
+    FieldChangeHistoryRead,
     MatchProposeRequest,
     MatchQueueItem,
     MatchRead,
@@ -283,6 +287,13 @@ def _change_status(db: Session, actor: User, spec: CaseTypeSpec, case_id: uuid.U
             )
         if spec.case_type is CaseType.FOUND_ITEM and case.found_item.custody_status != CustodyStatus.RELEASED:
             raise Conflict("Release the item from custody before resolving", code="custody_not_released")
+        if spec.is_person:
+            from app.config import get_settings
+
+            if get_settings().handover_required_for_resolve:
+                from app.services.handovers import require_completed_for_resolve
+
+                require_completed_for_resolve(db, case, match_id=req.match_id)
 
     _apply_transition(
         db, case, target, actor, req.reason, evidence=req.verification_evidence, match_id=req.match_id
@@ -307,6 +318,7 @@ def _change_custody(db: Session, actor: User, spec: CaseTypeSpec, case_id: uuid.
         raise Conflict("Closed cases cannot change custody", code="case_closed")
     detail = case.found_item
     current = CustodyStatus(detail.custody_status)
+    previous_storage_location = detail.storage_location
     if req.custody_status not in CUSTODY_TRANSITIONS[current]:
         raise InvalidTransition(
             f"Cannot move custody from {current} to {req.custody_status}",
@@ -329,8 +341,14 @@ def _change_custody(db: Session, actor: User, spec: CaseTypeSpec, case_id: uuid.
     case.updated_at = func.now()
     record_audit(
         db, action=AuditAction.CUSTODY_CHANGED, entity_type="case", entity_id=case.id, actor_user_id=actor.id,
-        case=case, before={"custody_status": current},
-        after={"custody_status": req.custody_status, "storage_location_changed": bool(req.storage_location)},
+        case=case,
+        before={"custody_status": current, "storage_location": previous_storage_location},
+        after={
+            "custody_status": req.custody_status,
+            "storage_location": detail.storage_location,
+            "handover_acknowledgement_recorded": req.recipient_acknowledgement is not None,
+            "actor_role": Role(actor.role).value,
+        },
         reason=req.reason,
     )
     db.commit()
@@ -459,6 +477,109 @@ def _add_note(db: Session, actor: User, case_id: uuid.UUID, req: NoteCreate, not
 # --- History -------------------------------------------------------------------------------------
 
 
+def _field_history_value(actor: User, change: dict, key: str):
+    permission_value = change.get("read_permission")
+    if permission_value:
+        try:
+            permission = Permission(permission_value)
+        except ValueError:
+            return "[REDACTED]"
+        if not has_permission(actor, permission):
+            return "[REDACTED]"
+    value = change.get(key)
+    if change.get("value_encoding") == "fernet-json" and value is not None:
+        return json.loads(decrypt_text(value))
+    return value
+
+
+def _audit_actor_role(db: Session, row: AuditEvent, payload: dict) -> Role | None:
+    role_value = payload.get("actor_role")
+    if role_value is None and row.actor_user_id is not None:
+        historical_actor = db.get(User, row.actor_user_id)
+        role_value = historical_actor.role if historical_actor is not None else None
+    try:
+        return Role(role_value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _field_history(db: Session, actor: User, case_id: uuid.UUID) -> list[FieldChangeHistoryRead]:
+    # Citizens retain their status timeline but never receive old personal values.
+    if Role(actor.role) is Role.PUBLIC:
+        return []
+    rows = db.scalars(
+        select(AuditEvent)
+        .where(AuditEvent.case_id == case_id, AuditEvent.action == AuditAction.CASE_UPDATED.value)
+        .order_by(AuditEvent.created_at, AuditEvent.id)
+    )
+    result: list[FieldChangeHistoryRead] = []
+    for row in rows:
+        payload = row.after_state or {}
+        changes = payload.get("field_changes")
+        if not isinstance(changes, list) or row.actor_user_id is None:
+            continue
+        actor_role = _audit_actor_role(db, row, payload)
+        if actor_role is None:
+            continue
+        for change in changes:
+            if not isinstance(change, dict) or not isinstance(change.get("field_name"), str):
+                continue
+            result.append(
+                FieldChangeHistoryRead(
+                    case_id=case_id,
+                    field_name=change["field_name"],
+                    previous_value=_field_history_value(actor, change, "previous_value"),
+                    updated_value=_field_history_value(actor, change, "updated_value"),
+                    updated_by_user_id=row.actor_user_id,
+                    user_role=actor_role,
+                    timestamp=row.created_at,
+                    action_type=row.action,
+                )
+            )
+    return result
+
+
+def _custody_history(db: Session, actor: User, case_id: uuid.UUID) -> list[CustodyHistoryRead]:
+    # Citizen history remains limited to case status; custody locations and staff identities are operational data.
+    if Role(actor.role) is Role.PUBLIC:
+        return []
+    rows = db.scalars(
+        select(AuditEvent)
+        .where(AuditEvent.case_id == case_id, AuditEvent.action == AuditAction.CUSTODY_CHANGED.value)
+        .order_by(AuditEvent.created_at, AuditEvent.id)
+    )
+    result: list[CustodyHistoryRead] = []
+    for row in rows:
+        if row.actor_user_id is None:
+            continue
+        before = row.before_state or {}
+        after = row.after_state or {}
+        try:
+            from_status = CustodyStatus(before.get("custody_status"))
+            to_status = CustodyStatus(after.get("custody_status"))
+        except (TypeError, ValueError):
+            continue
+        actor_role = _audit_actor_role(db, row, after)
+        if actor_role is None:
+            continue
+        storage_location = after.get("storage_location")
+        result.append(
+            CustodyHistoryRead(
+                id=row.id,
+                case_id=case_id,
+                from_status=from_status,
+                to_status=to_status,
+                storage_location=storage_location if isinstance(storage_location, str) else None,
+                changed_by_user_id=row.actor_user_id,
+                user_role=actor_role,
+                reason=row.reason,
+                handover_acknowledgement_recorded=bool(after.get("handover_acknowledgement_recorded")),
+                created_at=row.created_at,
+            )
+        )
+    return result
+
+
 def get_history(db: Session, actor: User, case_id: uuid.UUID) -> CaseHistory:
     require_permission(actor, Permission.CASE_READ, allow_public=True)
     load_case(db, actor, case_id)
@@ -487,6 +608,8 @@ def get_history(db: Session, actor: User, case_id: uuid.UUID) -> CaseHistory:
     return CaseHistory(
         status_history=status_views,
         assignments=assignments,
+        field_changes=_field_history(db, actor, case_id),
+        custody_history=_custody_history(db, actor, case_id),
     )
 
 

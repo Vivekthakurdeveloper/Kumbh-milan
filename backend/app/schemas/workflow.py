@@ -15,6 +15,7 @@ from app.models.enums import (
     MatchStatus,
     MediaType,
     NoteType,
+    Role,
     ScanStatus,
 )
 from app.schemas.cases import CaseSummary
@@ -104,9 +105,35 @@ class StatusHistoryRead(ReadModel):
     created_at: datetime
 
 
+class FieldChangeHistoryRead(StrictModel):
+    case_id: uuid.UUID
+    field_name: str
+    previous_value: Any
+    updated_value: Any
+    updated_by_user_id: uuid.UUID
+    user_role: Role
+    timestamp: datetime
+    action_type: str
+
+
+class CustodyHistoryRead(StrictModel):
+    id: uuid.UUID
+    case_id: uuid.UUID
+    from_status: CustodyStatus
+    to_status: CustodyStatus
+    storage_location: str | None
+    changed_by_user_id: uuid.UUID
+    user_role: Role
+    reason: str | None
+    handover_acknowledgement_recorded: bool = False
+    created_at: datetime
+
+
 class CaseHistory(StrictModel):
     status_history: list[StatusHistoryRead]
     assignments: list[AssignmentRead]
+    field_changes: list[FieldChangeHistoryRead] = Field(default_factory=list)
+    custody_history: list[CustodyHistoryRead] = Field(default_factory=list)
 
 
 class MatchProposeRequest(StrictModel):

@@ -249,13 +249,22 @@ def maintenance_worker(args: argparse.Namespace) -> int:
         try:
             purge_expired(argparse.Namespace(login_attempt_days=args.login_attempt_days, session_days=args.session_days))
             with SessionLocal() as db:
-                report = attachment_service.reconcile_objects(db, get_storage(), limit=args.limit)
+                storage = get_storage()
+                report = attachment_service.reconcile_objects(db, storage, limit=args.limit)
+                from app.services import attachment_sessions as attachment_session_service
                 from app.services import faces as face_service
 
+                expired_upload_sessions = attachment_session_service.purge_expired_sessions(
+                    db, storage, limit=args.limit
+                )
                 purged_faces = face_service.purge_face_embeddings(db)
             log.info(
                 "Object reconciliation",
-                extra={**{k: report[k] for k in ("checked", "missing_objects")}, "face_embeddings_purged": purged_faces},
+                extra={
+                    **{k: report[k] for k in ("checked", "missing_objects")},
+                    "expired_upload_sessions": expired_upload_sessions,
+                    "face_embeddings_purged": purged_faces,
+                },
             )
         except Exception as exc:  # noqa: BLE001
             status = "degraded"

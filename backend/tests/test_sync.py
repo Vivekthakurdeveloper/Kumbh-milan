@@ -2,15 +2,27 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import DBAPIError
 
 from app.database import SessionLocal
-from app.models import AuditEvent, Case, CaseAttachment, CaseNote, SyncDevice
+from app.models import (
+    AuditEvent,
+    AttachmentUploadSession,
+    Case,
+    CaseAttachment,
+    CaseNote,
+    SyncDeliveredCase,
+    SyncDevice,
+    SyncTombstone,
+    User,
+)
 from tests.helpers import (
     API,
     FOUND_ITEM,
@@ -40,10 +52,12 @@ def push(client, actor, records, device_id=DEVICE, **extra):
     return client.post(f"{API}/sync/push", json=body, headers=actor.headers)
 
 
-def pull(client, actor, *, cursor=None, limit=50, device_id=DEVICE):
+def pull(client, actor, *, cursor=None, tombstone_cursor=None, limit=50, device_id=DEVICE):
     params = {"device_id": device_id, "limit": limit}
     if cursor:
         params["cursor"] = cursor
+    if tombstone_cursor:
+        params["tombstone_cursor"] = tombstone_cursor
     return client.get(f"{API}/sync/pull", params=params, headers=actor.headers)
 
 
@@ -63,6 +77,20 @@ def _create_record(case_type: str, data: dict, client_record_id: str | None = No
         "client_created_at": _now(),
         "case_type": case_type,
         "data": data,
+    }
+
+
+def _upload_manifest(case_id: str, data: bytes, *, client_record_id: str, checksum: str | None = None) -> dict:
+    return {
+        "case_id": case_id,
+        "device_id": DEVICE,
+        "client_record_id": client_record_id,
+        "client_id": "app-1",
+        "media_type": "PHOTO",
+        "expected_checksum_sha256": checksum or hashlib.sha256(data).hexdigest(),
+        "expected_size_bytes": len(data),
+        "original_filename": "offline.png",
+        "declared_content_type": "image/png",
     }
 
 
@@ -263,6 +291,92 @@ def test_unauthorized_station_synchronization(client, actors):
         assert str(a_case.id) not in ids
 
 
+def test_archived_case_emits_private_replayable_tombstone_after_push(client, actors):
+    created = push(
+        client,
+        actors.helpdesk,
+        [_create_record("MISSING_PERSON", MISSING_PERSON, "tombstone-archive")],
+    )
+    case_id = uuid.UUID(created.json()["results"][0]["case_id"])
+    with SessionLocal() as db:
+        ledger = db.get(SyncDeliveredCase, (actors.helpdesk.id, case_id))
+        assert ledger is not None and ledger.is_currently_delivered is True
+        now = datetime.now(timezone.utc)
+        db.execute(
+            update(Case)
+            .where(Case.id == case_id)
+            .values(status="CLOSED", closed_at=now, archived_at=now)
+        )
+        db.commit()
+
+    first = pull(client, actors.helpdesk)
+    assert first.status_code == 200, first.text
+    tombstones = first.json()["tombstones"]
+    assert len(tombstones) == 1
+    assert tombstones[0]["case_id"] == str(case_id)
+    assert tombstones[0]["reason"] == "ARCHIVED"
+    assert set(tombstones[0]) == {"case_id", "reason", "server_updated_at"}
+    assert str(case_id) not in {item["case"]["id"] for item in first.json()["items"]}
+    assert first.json()["next_tombstone_cursor"]
+
+    replay = pull(client, actors.helpdesk)
+    assert replay.json()["tombstones"] == tombstones
+    advanced = pull(
+        client,
+        actors.helpdesk,
+        tombstone_cursor=first.json()["next_tombstone_cursor"],
+    )
+    assert advanced.json()["tombstones"] == []
+    assert advanced.json()["has_more_tombstones"] is False
+    with SessionLocal() as db:
+        assert db.scalar(
+            select(func.count()).select_from(SyncTombstone).where(
+                SyncTombstone.user_id == actors.helpdesk.id,
+                SyncTombstone.case_id == case_id,
+            )
+        ) == 1
+        with pytest.raises(DBAPIError, match="append-only"):
+            db.execute(
+                update(SyncTombstone)
+                .where(SyncTombstone.case_id == case_id)
+                .values(reason="SCOPE_REVOKED")
+            )
+
+
+def test_scope_revocation_tombstone_only_for_user_who_received_case(client, actors):
+    case = create_case(client, actors.helpdesk, "missing-persons")
+    delivered = pull(client, actors.helpdesk)
+    assert case["id"] in {item["case"]["id"] for item in delivered.json()["items"]}
+
+    with SessionLocal() as db:
+        db.execute(
+            update(User)
+            .where(User.id == actors.helpdesk.id)
+            .values(station_id=actors.station_b)
+        )
+        db.commit()
+
+    revoked = pull(client, actors.helpdesk)
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["tombstones"] == [
+        {
+            "case_id": case["id"],
+            "reason": "SCOPE_REVOKED",
+            "server_updated_at": revoked.json()["tombstones"][0]["server_updated_at"],
+        }
+    ]
+
+    never_received = pull(client, actors.helpdesk_b)
+    assert never_received.status_code == 200
+    assert never_received.json()["tombstones"] == []
+
+
+def test_invalid_tombstone_cursor_is_rejected(client, actors):
+    response = pull(client, actors.helpdesk, tombstone_cursor="not-a-cursor")
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_cursor"
+
+
 def test_photograph_upload_association_and_retry(client, actors):
     created = push(client, actors.helpdesk, [_create_record("FOUND_PERSON", FOUND_PERSON, "photo-case")])
     case_id = created.json()["results"][0]["case_id"]
@@ -322,6 +436,135 @@ def test_photograph_upload_association_and_retry(client, actors):
         headers=actors.helpdesk.headers,
     )
     assert huge.status_code == 413
+
+
+def test_resumable_attachment_session_upload_finalize_and_replay(client, actors):
+    created = push(client, actors.helpdesk, [_create_record("FOUND_PERSON", FOUND_PERSON, "session-case")])
+    case_id = created.json()["results"][0]["case_id"]
+    manifest = _upload_manifest(case_id, PNG, client_record_id="session-photo-1")
+    opened = client.post(
+        f"{API}/sync/attachments/sessions",
+        json=manifest,
+        headers=actors.helpdesk.headers,
+    )
+    assert opened.status_code == 201, opened.text
+    session = opened.json()
+    assert session["status"] == "OPEN" and session["bytes_received"] == 0
+
+    replay = client.post(
+        f"{API}/sync/attachments/sessions",
+        json=manifest,
+        headers=actors.helpdesk.headers,
+    )
+    assert replay.status_code == 200
+    assert replay.headers["Idempotent-Replayed"] == "true"
+    assert replay.json()["id"] == session["id"]
+
+    split = len(PNG) // 2
+    first = client.put(
+        f"{API}/sync/attachments/sessions/{session['id']}/content",
+        params={"offset": 0},
+        files={"file": ("chunk.bin", PNG[:split], "application/octet-stream")},
+        headers=actors.helpdesk.headers,
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "OPEN"
+    assert first.json()["bytes_received"] == split
+
+    sync_status = status(client, actors.helpdesk)
+    assert [row["id"] for row in sync_status.json()["attachment_sessions"]] == [session["id"]]
+
+    wrong_offset = client.put(
+        f"{API}/sync/attachments/sessions/{session['id']}/content",
+        params={"offset": 0},
+        files={"file": ("chunk.bin", PNG[split:], "application/octet-stream")},
+        headers=actors.helpdesk.headers,
+    )
+    assert wrong_offset.status_code == 409
+    assert wrong_offset.json()["error"]["code"] == "upload_offset_mismatch"
+    assert wrong_offset.json()["error"]["details"]["expected_offset"] == split
+
+    second = client.put(
+        f"{API}/sync/attachments/sessions/{session['id']}/content",
+        params={"offset": split},
+        files={"file": ("chunk.bin", PNG[split:], "application/octet-stream")},
+        headers=actors.helpdesk.headers,
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "READY"
+    assert second.json()["bytes_received"] == len(PNG)
+
+    finalized = client.post(
+        f"{API}/sync/attachments/sessions/{session['id']}/finalize",
+        headers=actors.helpdesk.headers,
+    )
+    assert finalized.status_code == 200, finalized.text
+    body = finalized.json()
+    assert body["session"]["status"] == "FINALIZED"
+    assert body["session"]["attachment_id"] == body["attachment"]["id"]
+    assert body["attachment"]["case_id"] == case_id
+    assert body["attachment"]["downloadable"] is True
+
+    final_replay = client.post(
+        f"{API}/sync/attachments/sessions/{session['id']}/finalize",
+        headers=actors.helpdesk.headers,
+    )
+    assert final_replay.status_code == 200
+    assert final_replay.json()["replayed"] is True
+    assert final_replay.json()["attachment"]["id"] == body["attachment"]["id"]
+    assert status(client, actors.helpdesk).json()["attachment_sessions"] == []
+    with SessionLocal() as db:
+        assert db.scalar(
+            select(func.count()).select_from(CaseAttachment).where(
+                CaseAttachment.client_record_id == "session-photo-1"
+            )
+        ) == 1
+
+
+def test_attachment_session_checksum_failure_and_expiry_cleanup(client, actors, storage):
+    from app.services import attachment_sessions as attachment_session_service
+
+    created = push(client, actors.helpdesk, [_create_record("FOUND_PERSON", FOUND_PERSON, "failed-session-case")])
+    case_id = created.json()["results"][0]["case_id"]
+    manifest = _upload_manifest(
+        case_id,
+        PNG,
+        client_record_id="session-bad-checksum",
+        checksum="0" * 64,
+    )
+    opened = client.post(
+        f"{API}/sync/attachments/sessions",
+        json=manifest,
+        headers=actors.helpdesk.headers,
+    ).json()
+    uploaded = client.put(
+        f"{API}/sync/attachments/sessions/{opened['id']}/content",
+        params={"offset": 0},
+        files={"file": ("chunk.bin", PNG, "application/octet-stream")},
+        headers=actors.helpdesk.headers,
+    )
+    assert uploaded.status_code == 200 and uploaded.json()["status"] == "READY"
+    failed = client.post(
+        f"{API}/sync/attachments/sessions/{opened['id']}/finalize",
+        headers=actors.helpdesk.headers,
+    )
+    assert failed.status_code == 422
+    assert failed.json()["error"]["code"] == "upload_checksum_mismatch"
+    assert status(client, actors.helpdesk).json()["attachment_sessions"][0]["status"] == "FAILED"
+
+    expiry_manifest = _upload_manifest(case_id, PNG, client_record_id="session-expiry")
+    expiring = client.post(
+        f"{API}/sync/attachments/sessions",
+        json=expiry_manifest,
+        headers=actors.helpdesk.headers,
+    ).json()
+    with SessionLocal() as db:
+        row = db.get(AttachmentUploadSession, uuid.UUID(expiring["id"]))
+        row.expires_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        db.commit()
+        assert attachment_session_service.purge_expired_sessions(db, storage) == 1
+        db.refresh(row)
+        assert row.status == "EXPIRED"
 
 
 def test_pull_pagination_and_note_bumps_cursor(client, actors):
@@ -421,3 +664,9 @@ def test_sync_migration_upgrade_downgrade_preserves_cases(client, actors, migrat
         ).scalars().all()
         assert set(cols) == {"client_record_id", "device_id", "sync_changed_at", "sync_status"}
         assert db.execute(text("SELECT to_regclass('sync_devices')")).scalar() == "sync_devices"
+        assert db.execute(text("SELECT to_regclass('sync_delivered_cases')")).scalar() == "sync_delivered_cases"
+        assert db.execute(text("SELECT to_regclass('sync_tombstones')")).scalar() == "sync_tombstones"
+        assert (
+            db.execute(text("SELECT to_regclass('attachment_upload_sessions')")).scalar()
+            == "attachment_upload_sessions"
+        )

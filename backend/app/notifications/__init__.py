@@ -15,7 +15,7 @@ import ssl
 from dataclasses import dataclass
 from email.message import EmailMessage
 from functools import lru_cache
-from typing import Protocol
+from typing import Any, Protocol
 from urllib import error, request
 
 from app.config import get_settings
@@ -174,7 +174,7 @@ class MockProvider:
     enabled = True
 
     def __init__(self) -> None:
-        self.deliveries: list[dict[str, str]] = []
+        self.deliveries: list[dict[str, Any]] = []
         self.fail: ProviderError | None = None
 
     def send(
@@ -201,6 +201,9 @@ class MockProvider:
                 "body": body,
                 "key": idempotency_key,
                 "subject": subject or "",
+                "template": template.value if template is not None else None,
+                "locale": locale,
+                "extras": extras or {},
             }
         )
         return Delivery(provider_message_id=f"mock-{idempotency_key[:40]}")

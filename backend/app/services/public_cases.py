@@ -29,8 +29,13 @@ from app.models.enums import (
     Role,
 )
 from app.notifications import normalise_phone
-from app.schemas.cases import MissingPersonCreate
-from app.schemas.public import PublicMissingPersonCreate, PublicReviewRequest
+from app.schemas.public import (
+    PublicFoundItemCreate,
+    PublicFoundPersonCreate,
+    PublicLostItemCreate,
+    PublicMissingPersonCreate,
+    PublicReviewRequest,
+)
 from app.schemas.workflow import StatusChangeRequest
 from app.services import attachments as attachment_service
 from app.services import cases as case_service
@@ -103,12 +108,32 @@ def _require_verified_mobile(token: str, *, purpose: OtpPurpose, expected_mobile
     return phone
 
 
-def submit_missing_person(
+PublicCaseCreate = PublicMissingPersonCreate | PublicFoundPersonCreate | PublicLostItemCreate | PublicFoundItemCreate
+
+_PUBLIC_CASE_SCHEMAS = {
+    CaseType.MISSING_PERSON: PublicMissingPersonCreate,
+    CaseType.FOUND_PERSON: PublicFoundPersonCreate,
+    CaseType.LOST_ITEM: PublicLostItemCreate,
+    CaseType.FOUND_ITEM: PublicFoundItemCreate,
+}
+
+_REPORTER_FIELDS = {
+    "reporter_name",
+    "reporter_mobile_number",
+    "reporter_email",
+    "preferred_locale",
+    "notification_consent",
+    "notification_consent_statement",
+}
+
+
+def submit_public_case(
     db: Session,
     storage: ObjectStorage,
     scanner: MalwareScanner,
     *,
-    payload: PublicMissingPersonCreate,
+    case_type: CaseType,
+    payload: PublicCaseCreate,
     verified_mobile_token: str,
     idempotency_key: str | None,
     photo: BinaryIO | None = None,
@@ -122,20 +147,16 @@ def submit_missing_person(
     )
     actor = _intake_actor(db)
     settings = get_settings()
+    spec = CASE_TYPE_SPECS[case_type]
     email = str(payload.reporter_email) if payload.reporter_email else None
     consent_at = utcnow() if payload.notification_consent else None
     consent_statement = payload.notification_consent_statement if payload.notification_consent else None
 
-    create_payload = MissingPersonCreate(
-        person_name=payload.person_name,
-        approximate_age=payload.approximate_age,
-        age_group=payload.age_group,
-        gender=payload.gender,
-        clothing_description=payload.clothing_description,
-        last_seen_location=payload.last_seen_location,
-        last_seen_at=payload.last_seen_at,
-        additional_description=payload.additional_description,
-        station_id=settings.public_intake_station_id,
+    create_payload = spec.create_schema.model_validate(
+        {
+            **payload.model_dump(exclude=_REPORTER_FIELDS),
+            "station_id": settings.public_intake_station_id,
+        }
     )
     public_contact = {
         "mobile": phone,
@@ -153,7 +174,7 @@ def submit_missing_person(
     case, replayed = case_service.create_case(
         db,
         actor,
-        CASE_TYPE_SPECS[CaseType.MISSING_PERSON],
+        spec,
         create_payload,
         idempotency_key=namespaced_key,
         source=CaseSource.PUBLIC,
@@ -169,7 +190,10 @@ def submit_missing_person(
             entity_id=case.id,
             actor_user_id=actor.id,
             case=case,
-            after={"public_review_status": PublicReviewStatus.PENDING_VERIFICATION},
+            after={
+                "case_type": case_type,
+                "public_review_status": PublicReviewStatus.PENDING_VERIFICATION,
+            },
         )
         channels = [NotificationChannel.SMS]
         if email and consent_statement:
@@ -202,6 +226,33 @@ def submit_missing_person(
         "status": case.public_review_status,
         "message": "Report submitted successfully",
     }, replayed
+
+
+def submit_missing_person(
+    db: Session,
+    storage: ObjectStorage,
+    scanner: MalwareScanner,
+    *,
+    payload: PublicMissingPersonCreate,
+    verified_mobile_token: str,
+    idempotency_key: str | None,
+    photo: BinaryIO | None = None,
+    photo_filename: str | None = None,
+    photo_content_type: str | None = None,
+) -> tuple[dict, bool]:
+    """Backward-compatible wrapper for the original public missing-person service."""
+    return submit_public_case(
+        db,
+        storage,
+        scanner,
+        case_type=CaseType.MISSING_PERSON,
+        payload=payload,
+        verified_mobile_token=verified_mobile_token,
+        idempotency_key=idempotency_key,
+        photo=photo,
+        photo_filename=photo_filename,
+        photo_content_type=photo_content_type,
+    )
 
 
 def review_public_case(db: Session, actor: User, case_id: uuid.UUID, req: PublicReviewRequest) -> Case:
@@ -278,7 +329,7 @@ def public_status_for_token(db: Session, *, case_number: str, authorization: str
     }
 
 
-def parse_public_report(raw: str) -> PublicMissingPersonCreate:
+def parse_public_report(raw: str, *, case_type: CaseType = CaseType.MISSING_PERSON) -> PublicCaseCreate:
     from pydantic import ValidationError
 
     try:
@@ -286,6 +337,6 @@ def parse_public_report(raw: str) -> PublicMissingPersonCreate:
     except json.JSONDecodeError as exc:
         raise ValidationFailed("report must be valid JSON", code="invalid_report_json") from exc
     try:
-        return PublicMissingPersonCreate.model_validate(data)
+        return _PUBLIC_CASE_SCHEMAS[case_type].model_validate(data)
     except ValidationError as exc:
         raise ValidationFailed("Invalid public report", code="validation_failed", details=exc.errors()) from exc

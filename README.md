@@ -4,6 +4,8 @@ Case management API for police stations and help desks at Haridwar Kumbh Mela 20
 
 Stack: Python 3.12, FastAPI, PostgreSQL 16, SQLAlchemy 2, Alembic, Pydantic 2, Argon2id + JWT, S3-compatible private object storage, Pytest, Docker Compose.
 
+Programme roadmap: [docs/PRODUCT_IMPLEMENTATION_PLAN.md](docs/PRODUCT_IMPLEMENTATION_PLAN.md). Backend delivery tickets: [docs/BACKEND_ENGINEERING_BACKLOG.md](docs/BACKEND_ENGINEERING_BACKLOG.md).
+
 ```
 backend/
   app/
@@ -97,11 +99,14 @@ Interactive docs live at `/docs` and the schema at `/openapi.json` (both disable
 | Users | `GET /users/assignable-officers`; `GET/POST /users`, `GET/PATCH /users/{id}`, `POST /users/{id}/reset-password` (admin) |
 | Per-type cases | for `missing-persons`, `found-persons`, `lost-items`, `found-items`: `POST` and `GET /cases/{type}`; `GET` and `PATCH /cases/{type}/{id}`; `POST /cases/{type}/{id}/assign`; `POST /cases/{type}/{id}/status` |
 | Custody | `POST /cases/found-items/{id}/custody` |
-| Any case | `GET /cases` (cross-type search), `GET /cases/{id}`, `GET /cases/{id}/history` |
+| Any case | `GET /cases` (cross-type search), `GET /cases/{id}`, `GET /cases/{id}/history` (status, assignment, field, and custody changes) |
+| Structured handover | `/cases/{id}/handovers` create/list/detail, verify/reject, complete, history (police/admin) |
 | Contacts | `POST /cases/{id}/contact/reveal` (police/admin, requires a reason, audited) |
 | Notes | `GET/POST /cases/{id}/notes` |
 | Attachments | `GET/POST /cases/{id}/attachments`; `GET /cases/{id}/attachments/{aid}` (presigned URL, audited); `DELETE …/{aid}` (soft delete) |
 | Matches | `GET/POST /cases/{id}/matches`; `POST /cases/{id}/matches/{mid}/review` |
+| Mobile sync | `/sync/push`, `/sync/pull`, `/sync/status`; resumable `/sync/attachments/sessions…` |
+| Public portal | OTP, all four account-free case forms, sightings, status tracking, and public information under `/public` |
 | Audit | `GET /audit-events` (admin) |
 
 Conventions:
@@ -178,7 +183,7 @@ Rules for status changes:
 ## Security protections
 
 - **Secrets:** all secrets come from the environment. Production refuses to start with placeholder or short JWT secrets, a missing contact encryption key, or docs enabled. `.env` is gitignored, and `.env.example` contains placeholders only.
-- **Contact data:** encrypted at rest with Fernet in `case_contacts`. Contacts never appear in list, search, or audit output; case detail returns only `has_contact_details`. Reading them requires the audited reveal endpoint.
+- **Contact data:** encrypted at rest with Fernet in `case_contacts`. Contacts never appear in list or search output; case detail returns only `has_contact_details`. Current values require the audited reveal endpoint. Historical contact changes remain ciphertext in append-only audit storage and are decrypted only by the role-gated history service.
 - **Audit:** logins and failures, logouts, password events, user and station changes, case create/update, assignment, status, custody, notes, uploads, downloads, deletions, contact reveals, and match proposals and reviews. Values are redacted before storage, and each event records the request id, IP, and user agent.
 - **Uploads:**
   - The type is detected from file signatures; the client's `Content-Type` and filename are ignored. A declared type that conflicts with the content is rejected.
@@ -304,11 +309,12 @@ Media: enable bucket versioning and replication to a second region or site, or s
 - **Rate limiting** defaults to memory per process. Staging and production settings require Redis. Compose wires `REDIS_URL` into the API; set `RATE_LIMIT_BACKEND=redis` to use it.
 - **Malware scanning** requires `SCAN_MODE=clamav` and a reachable ClamAV daemon. There is no ClamAV service in the default Compose file. `SCAN_MODE=disabled` is local-only and must not be treated as a clean scan.
 - **Geospatial search** is implemented with PostGIS (`/cases/nearby`, `/cases/map`, and location administration). Hindi support in matching is dictionary normalisation, not semantic or machine translation.
-- **Matching** is deterministic and explainable. It never confirms identity, reunification, or release by itself. There is no face recognition.
-- **Notifications** have an outbox, English and Hindi templates, and `console` or `mock` providers. A real SMS or WhatsApp provider is not integrated.
-- **No public self-service portal and no volunteer role.** The API does not include a frontend.
+- **Matching** includes deterministic explainable rules and optional OpenCV face-assisted candidates. Neither path confirms identity, reunification, or release by itself; face candidates require human review and production biometric approval.
+- **Notifications** have an outbox, English and Hindi templates, local `console`/`mock` providers, and an MSG91 SMS adapter. Live MSG91 use remains blocked on credentials, DLT-approved template IDs, consent approval, and sandbox verification; WhatsApp is not integrated.
+- **Public self-service APIs exist, but no citizen or staff frontend is included.** OTP-verified account-free intake covers all four case types and sightings; authenticated PUBLIC accounts can also create all four types. No volunteer role is approved.
 - **Confirming a match** can move an active case, including `OPEN`, to `MATCH_FOUND` after human review. That is separate from the generic status-transition table.
+- **Structured handovers** encrypt claimant/witness/evidence data and support police/admin verification and completion. `HANDOVER_REQUIRED_FOR_RESOLVE` remains false until revision `0014`, staff clients, policy, and UAT are approved together.
 - **Retention periods** in settings are operational defaults, not legally approved retention periods.
 - **MFA** can be enabled as TOTP step-up (`MFA_MODE=totp`). It is not phishing-resistant, and production MFA remains unapproved.
 - **Local object store:** SeaweedFS is used in Compose. Production should use a managed private S3 bucket.
-- **This workspace has no Git metadata.** CI configuration is in the tree but has not been executed by a hosted runner.
+- **Hosted backend CI is active and passes on current `main`.** Branch protection, load capacity, cloud deployment, and recovery evidence remain production gates.

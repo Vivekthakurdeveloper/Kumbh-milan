@@ -5,8 +5,14 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, StringConstraints, model_validator
 
-from app.models.enums import CaseType
+from app.models.enums import (
+    AttachmentUploadSessionStatus,
+    CaseType,
+    MediaType,
+    SyncTombstoneReason,
+)
 from app.schemas.common import PastDatetime, ReadModel, StrictModel
+from app.schemas.workflow import AttachmentRead
 
 DeviceId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 ClientRecordId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
@@ -105,11 +111,59 @@ class SyncPullItem(StrictModel):
     version: int
 
 
+class SyncPullTombstone(StrictModel):
+    case_id: uuid.UUID
+    reason: SyncTombstoneReason
+    server_updated_at: datetime
+
+
 class SyncPullResponse(StrictModel):
     items: list[SyncPullItem]
     next_cursor: str | None
     has_more: bool
     server_time: datetime
+    tombstones: list[SyncPullTombstone] = Field(default_factory=list)
+    next_tombstone_cursor: str | None = None
+    has_more_tombstones: bool = False
+
+
+class AttachmentUploadSessionCreate(StrictModel):
+    case_id: uuid.UUID
+    device_id: DeviceId
+    client_record_id: ClientRecordId
+    client_id: OptionalClientId = None
+    media_type: MediaType
+    expected_checksum_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_size_bytes: int = Field(gt=0)
+    original_filename: str | None = Field(None, max_length=255)
+    declared_content_type: str | None = Field(None, max_length=100)
+
+
+class AttachmentUploadSessionRead(ReadModel):
+    id: uuid.UUID
+    case_id: uuid.UUID
+    device_id: str
+    client_record_id: str
+    client_id: str | None
+    media_type: MediaType
+    expected_checksum_sha256: str
+    expected_size_bytes: int
+    original_filename: str | None
+    declared_content_type: str | None
+    status: AttachmentUploadSessionStatus
+    bytes_received: int
+    attachment_id: uuid.UUID | None
+    last_error_code: str | None
+    expires_at: datetime
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AttachmentUploadFinalizeResponse(StrictModel):
+    session: AttachmentUploadSessionRead
+    attachment: AttachmentRead
+    replayed: bool = False
 
 
 class SyncStatusResponse(ReadModel):
@@ -123,3 +177,4 @@ class SyncStatusResponse(ReadModel):
     failed_count: int | None = Field(None, description="Last value reported by the client; null if never reported")
     server_cursor: str | None = Field(None, description="Current sync cursor for the caller's permitted cases")
     server_time: datetime
+    attachment_sessions: list[AttachmentUploadSessionRead] = Field(default_factory=list)

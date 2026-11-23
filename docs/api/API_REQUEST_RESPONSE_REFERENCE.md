@@ -18,7 +18,7 @@ All application endpoints are under `/api/v1`. Example local base: `http://local
 | `Content-Type: application/json` | request | JSON bodies | Uploads use `multipart/form-data`. |
 | `Idempotency-Key: <8–128 chars>` | request | Optional on: case create, assign, status, custody, add note, match review, queue notification | Retrying with the same key and same body returns the original result with `Idempotent-Replayed: true`. Same key with a different body → `409 idempotency_key_reused`. Keys are per user and expire after 24 h (`IDEMPOTENCY_TTL_HOURS`). Not supported on PATCH, upload, propose match, or revoke. |
 | `X-Request-ID: <8–64 chars [A-Za-z0-9._-]>` | request (optional) / response | Always returned | Echoed when valid, otherwise generated. Show it in error toasts for support. |
-| `X-Step-Up-Code: <6 digits>` | request | Only when `MFA_MODE=totp`, for `POST /users/{id}/reset-password` and `POST /retention/runs/{id}/execute` | **Not** in the CORS allow-list (see gap G-17). |
+| `X-Step-Up-Code: <6 digits>` | request | Only when `MFA_MODE=totp`, for `POST /users/{id}/reset-password` and `POST /retention/runs/{id}/execute` | Allowed by CORS for approved origins; the server validates the code and session. |
 | `Idempotent-Replayed: true` | response | On an idempotent replay | Exposed to browsers via CORS. |
 | `Retry-After: <seconds>` | response | On `429` and `503` from the rate limiter | Exposed to browsers via CORS. |
 | `WWW-Authenticate: Bearer` | response | On every `401` | |
@@ -235,6 +235,7 @@ A case id outside the caller's scope, or of a different type than the URL's `{ty
   "phone_number": null,
   "address": null,
   "role": "POLICE_OFFICER",
+  "role_label": "Police Officer",
   "police_badge_number": "UK-HDW-0001",
   "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
   "is_active": true,
@@ -265,6 +266,7 @@ A newly registered PUBLIC account returns its saved registration values in the s
   "phone_number": "9000000001",
   "address": "Haridwar",
   "role": "PUBLIC",
+  "role_label": "Citizen",
   "police_badge_number": null,
   "station_id": null,
   "is_active": true,
@@ -330,7 +332,7 @@ The message is sent after the response, so neither the body nor the timing revea
 | `422 validation_failed` | `code` is not 6–12 digits, or a field is missing | Field errors |
 | `429` | 20 per hour per IP | Show retry time |
 
-Codes expire after `PASSWORD_RESET_TTL_MINUTES` (15). Codes are stored hashed and never logged or audited. Audit actions: `PASSWORD_RESET_REQUESTED`, `PASSWORD_RESET_COMPLETED`, `PASSWORD_RESET_CODE_BURNED`. **Delivery:** email goes out over SMTP when `EMAIL_PROVIDER=smtp`. SMS needs a real SMS provider behind `NOTIFICATION_PROVIDER`; none is integrated yet (the `console` and `mock` providers are local only), so today only email is deliverable outside local development. **Status:** Implemented — tested.
+Codes expire after `PASSWORD_RESET_TTL_MINUTES` (15). Codes are stored as keyed HMAC-SHA-256 values and never logged or audited. Audit actions: `PASSWORD_RESET_REQUESTED`, `PASSWORD_RESET_COMPLETED`, `PASSWORD_RESET_CODE_BURNED`. **Delivery:** email goes out over SMTP when `EMAIL_PROVIDER=smtp`. SMS uses the configured notification provider with `NotificationTemplate.PASSWORD_RESET` and an `otp` flow variable. MSG91 production delivery requires an approved DLT template id in `MSG91_TEMPLATE_IDS`; credentials and live delivery remain operational dependencies. **Frontend:** keep recovery visibility unchanged until product approval. **Status:** Implemented — tested.
 
 ### Endpoints: MFA — `POST /api/v1/auth/mfa/enroll`, `POST /api/v1/auth/mfa/confirm`
 
@@ -389,6 +391,7 @@ Body (all optional): `name`, `location_description`, `is_active`. `code` and `ki
     "full_name": "Sample Officer Rawat",
     "username": "officer.hkp",
     "role": "POLICE_OFFICER",
+    "role_label": "Police Officer",
     "police_badge_number": "UK-HDW-0001",
     "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22"
   }
@@ -397,7 +400,7 @@ Body (all optional): `name`, `location_description`, `is_active`. `code` and `ki
 
 ### Endpoint: User directory — `GET /api/v1/users/directory`
 
-**Purpose:** resolve reporter, assignee, and note-author ids to display names on case screens. **Roles:** all (`case:read`). **Query:** `ids` (repeatable uuid, 1–100). Unknown ids are omitted. Returns only `id`, `full_name`, `role`, `station_id` — never email, phone, badge, or username.
+**Purpose:** resolve reporter, assignee, and note-author ids to display names on case screens. **Roles:** all (`case:read`). **Query:** `ids` (repeatable uuid, 1–100). Unknown ids are omitted. Returns only `id`, `full_name`, `role`, `role_label`, `station_id` — never email, phone, badge, or username.
 
 <!-- validate: list[app.schemas.admin:UserDirectoryEntry] -->
 ```json
@@ -406,6 +409,7 @@ Body (all optional): `name`, `location_description`, `is_active`. `code` and `ki
     "id": "9a1e4b7c-2d3f-4a5b-8c6d-7e8f9a0b1c2d",
     "full_name": "Sample Officer Rawat",
     "role": "POLICE_OFFICER",
+    "role_label": "Police Officer",
     "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22"
   }
 ]
@@ -462,6 +466,7 @@ Example: `GET /api/v1/users?role=POLICE_OFFICER&station_id=3f6b2c1e-8a4d-4e2b-9c
   "phone_number": "+91 90000 00000",
   "address": null,
   "role": "HELP_DESK_OPERATOR",
+  "role_label": "Help Desk",
   "police_badge_number": null,
   "station_id": "3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22",
   "is_active": true,
@@ -809,7 +814,7 @@ URL-encode `+` in offsets as `%2B`.
 
 ### 6.6 Endpoint: Edit case — `PATCH /api/v1/cases/{type}/{case_id}`
 
-**Roles:** all (`case:update`), within scope. **Semantics:** partial update. Only fields present in the body are changed; a field sent as `null` is **cleared**. Sending a value equal to the current value is a no-op. If nothing changes, the case is returned unchanged with the same `version`.
+**Roles:** all staff roles (`case:update`), within scope. **Semantics:** partial update. Only fields present in the body are changed; nullable fields sent as `null` are cleared. Sending a value equal to the current value is a no-op. If nothing changes, the case is returned unchanged with the same `version`.
 
 <!-- validate: app.schemas.cases:MissingPersonUpdate -->
 ```json
@@ -830,12 +835,13 @@ Clearing coordinates:
 **Rules:**
 
 - Cases in `RESOLVED` or `CLOSED` cannot be edited (`409 case_closed`); reopen first. `MATCH_FOUND` cases can be edited.
-- `item_category` and `item_name` cannot be set to `null` (`422 required_field`).
+- An explicitly supplied `person_name` on a missing-person case, or `item_name` on an item case, cannot be `null`, empty, or whitespace-only (`422 validation_error`, message `Enter a valid value.`). Omit the field to preserve it.
+- `item_category` cannot be set to `null` (`422 required_field`).
 - `station_id` is not accepted. `custody_status` cannot be patched on found items (use custody endpoint).
 - `contact_details: null` deletes the stored contact; a string replaces it.
 - Editing descriptive fields or position re-runs automatic matching and re-scores open automatic suggestions.
 
-**Success 200:** updated `{Type}CaseRead` with incremented `version`. **Errors:** `404`, `409 case_changed` (`details: {case_id, expected_version, current_version}`), `409 case_closed`, `422 required_field`, `422 invalid_location`, `422 coordinates_out_of_area`, `422 coordinate_source_required`. **Side effects:** audit `CASE_UPDATED` (changed field names only, not values) and `CONTACT_UPDATED` when contact changed. **Status:** Implemented — tested.
+**Success 200:** updated `{Type}CaseRead` with incremented `version`. **Errors:** `404`, `409 case_changed` (`details: {case_id, expected_version, current_version}`), `409 case_closed`, `422 validation_error`, `422 required_field`, `422 invalid_location`, `422 coordinates_out_of_area`, `422 coordinate_source_required`. **Side effects:** append-only audit `CASE_UPDATED` with field-level previous/updated values and `CONTACT_UPDATED` when contact actually changed. Protected values are encrypted in the audit payload. **Status:** Implemented — tested.
 
 ### 6.7 Endpoint: Assign or reassign — `POST /api/v1/cases/{type}/{case_id}/assign`
 
@@ -1218,7 +1224,7 @@ Correction:
 
 ### 7.6 Endpoint: Case history — `GET /api/v1/cases/{case_id}/history`
 
-Status transitions and assignment history, oldest first. `verification_evidence` is `null` for help-desk callers.
+Status transitions, assignment history, field-level edits, and found-item custody events, oldest first. `verification_evidence` is `null` for help-desk callers. PUBLIC callers receive status history but `assignments`, `field_changes`, and `custody_history` are empty.
 
 <!-- validate: app.schemas.workflow:CaseHistory -->
 ```json
@@ -1255,11 +1261,26 @@ Status transitions and assignment history, oldest first. `verification_evidence`
       "reason": "Officer on duty at Har Ki Pauri",
       "is_active": true
     }
-  ]
+  ],
+  "field_changes": [
+    {
+      "case_id": "7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11",
+      "field_name": "person_name",
+      "previous_value": "Mohan",
+      "updated_value": "Mohan Kumar",
+      "updated_by_user_id": "1b2c3d4e-5f60-4718-89ab-cdef01234567",
+      "user_role": "HELP_DESK_OPERATOR",
+      "timestamp": "2026-10-29T02:17:00Z",
+      "action_type": "CASE_UPDATED"
+    }
+  ],
+  "custody_history": []
 }
 ```
 
-Not included: edits, notes, custody changes, contact views, attachment events (only in admin audit events). **Status:** Implemented — tested.
+Contact field values are returned only to police/admin callers with `case:contact_read`; help-desk callers see `[REDACTED]`. Precise coordinate history requires `note:sensitive`.
+
+For found-item cases, each `custody_history` entry contains `id`, `case_id`, `from_status`, `to_status`, `storage_location`, `changed_by_user_id`, `user_role`, `reason`, `handover_acknowledgement_recorded`, and `created_at`. The boolean confirms that release evidence was recorded; the acknowledgement text is not copied into history. Older custody audit rows created before this contract may have `storage_location: null`. Notes, contact views, and attachment events remain available only in admin audit events. **Status:** Implemented — tested.
 
 ### 7.7 Endpoint: Reveal contact — `POST /api/v1/cases/{case_id}/contact/reveal`
 
@@ -1285,7 +1306,7 @@ Not included: edits, notes, custody changes, contact views, attachment events (o
 
 ### How matching works (as implemented)
 
-Matching is **deterministic and rule-based** (`app/matching/engine.py`, engine version `rules-2026.10.1`), **not AI/ML**, and does not use photos. Missing persons are compared with found persons; lost items with found items. Features: gender, age/age group, language, clothing colours and garments, identifying marks, location distance, time gap, disability (persons); category, name, colours, description, location, time (items). Hard contradictions exclude a pair. Hindi colour/garment words are normalised by dictionary. Details: `docs/MATCHING.md`.
+Rule-based matching is **deterministic and explainable** (`app/matching/engine.py`, engine version `rules-2026.10.1`); that engine is not AI/ML and does not use photos. Missing persons are compared with found persons; lost items with found items. Features: gender, age/age group, language, clothing colours and garments, identifying marks, location distance, time gap, disability (persons); category, name, colours, description, location, time (items). Hard contradictions exclude a pair. Hindi colour/garment words are normalised by dictionary. A separate optional OpenCV YuNet/SFace pipeline creates face-assisted candidates under the same human-review workflow. Details: `docs/MATCHING.md`.
 
 Suggestions are created automatically after case creation or edit (if `MATCHING_AUTO_ENABLED`), on demand via `generate`, and by the `rematch` CLI. They are stored as `PROPOSED` + `AUTOMATIC`; nothing is confirmed automatically and no status changes.
 
@@ -1303,12 +1324,67 @@ sequenceDiagram
     Officer->>API: POST /cases/{id}/matches/{match_id}/review CONFIRMED + evidence
     API-->>Officer: both cases MATCH_FOUND
     Officer->>API: POST /cases/{id}/contact/reveal (call family)
+    Officer->>API: POST /cases/{id}/handovers (claimant + optional witness)
+    Officer->>API: POST /cases/{id}/handovers/{hid}/verify
+    Officer->>API: POST /cases/{id}/handovers/{hid}/complete
     Officer->>API: POST /cases/missing-persons/{id}/status RESOLVED + match_id + verification_evidence
     Officer->>API: POST /cases/found-persons/{other}/status RESOLVED + match_id + verification_evidence
     Officer->>API: POST /cases/{type}/{id}/status CLOSED (each case, when done)
 ```
 
 Each case is resolved separately; resolving one does not resolve its counterpart. For items, the found item must be custody-`RELEASED` before it can be `RESOLVED`.
+
+### Structured claimant verification and handover
+
+All structured handover routes require `handover:read` or `handover:manage`, currently police/admin only. Claimant, witness, verification, acknowledgement, and rejection values are encrypted at rest and excluded from audit payloads. Every lifecycle action writes a redacted audit event.
+
+Create: `POST /api/v1/cases/{case_id}/handovers` with `Idempotency-Key`. Person reunification requires a confirmed person `match_id`; a match-less item return must be opened from the found-item case.
+
+<!-- validate: app.schemas.handover:HandoverCreateRequest -->
+```json
+{
+  "match_id": "8b7a6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d",
+  "claimant_full_name": "Sample Parent",
+  "claimant_relationship": "Father",
+  "claimant_mobile_number": "9876543210",
+  "claimant_address": "Sector 3 camp",
+  "identity_document_type": "AADHAAR",
+  "identity_document_reference": "XXXX-XXXX-1234",
+  "witness_full_name": "Sample Witness",
+  "witness_relationship": "Family friend",
+  "witness_statement": "Witnessed claimant verification at the police desk"
+}
+```
+
+Verify or reject: `POST /api/v1/cases/{case_id}/handovers/{handover_id}/verify`.
+
+<!-- validate: app.schemas.handover:HandoverVerifyRequest -->
+```json
+{
+  "decision": "VERIFIED",
+  "verification_method": "GOVERNMENT_ID",
+  "evidence": "Document reference and family answers matched the case record"
+}
+```
+
+Complete: `POST /api/v1/cases/{case_id}/handovers/{handover_id}/complete`. A found-item handover also requires custody `RELEASED`.
+
+<!-- validate: app.schemas.handover:HandoverCompleteRequest -->
+```json
+{
+  "handover_location": "Har Ki Pauri police help desk",
+  "handover_at": "2026-11-07T13:00:00+05:30",
+  "acknowledgement": "Claimant and witness signed the handover register"
+}
+```
+
+Read routes:
+
+- `GET /api/v1/cases/{case_id}/handovers`
+- `GET /api/v1/cases/{case_id}/handovers/{handover_id}`
+- `GET /api/v1/cases/{case_id}/handovers/{handover_id}/history`
+
+`HANDOVER_REQUIRED_FOR_RESOLVE=false` is the compatibility default. After staff clients are deployed and the setting is enabled, person-case `RESOLVED` transitions without a completed structured handover return `422 handover_not_completed`. Existing resolved/closed cases are not backfilled.
 
 ### Endpoint: List matches for a case — `GET /api/v1/cases/{case_id}/matches`
 
@@ -1767,7 +1843,7 @@ case_number,case_type,status,station_id,urgency_level,created_at
 KSLF-MP-2026-000042,MISSING_PERSON,ASSIGNED,3f6b2c1e-8a4d-4e2b-9c71-5d0a6e8f1b22,HIGH,2026-10-29T02:15:03.512000+00:00
 ```
 
-Columns are fixed. No names, descriptions, contact details, or notes. Cells starting with `= + - @` are prefixed with `'` to prevent spreadsheet formula injection. The `X-Export-*` and `Content-Disposition` headers are **not exposed via CORS** (gap G-16), so a cross-origin browser client cannot read them. Audit `CASE_EXPORTED`. **Status:** Partial.
+Columns are fixed. No names, descriptions, contact details, or notes. Cells starting with `= + - @` are prefixed with `'` to prevent spreadsheet formula injection. `X-Export-Rows`, `X-Export-Truncated`, and `Content-Disposition` are exposed to approved browser origins. Audit `CASE_EXPORTED`. **Status:** Partial because this remains one bounded report.
 
 ---
 
@@ -1882,7 +1958,7 @@ Example: `GET /api/v1/audit-events?case_id=6f5e4d3c-2b1a-4098-8f7e-6d5c4b3a2918&
 
 ### OTP — `POST /api/v1/public/otp/request` / `verify`
 
-Request (report or sighting only; status uses the dedicated endpoints):
+Request (case report or sighting only; status uses the dedicated endpoints). `REPORT_MISSING` is retained as the backwards-compatible verified-mobile purpose for all four account-free case-report forms:
 
 <!-- validate: app.schemas.public:OtpRequest -->
 ```json
@@ -1897,6 +1973,64 @@ Success always looks like an SMS was accepted (anti-enumeration for status uses 
 
 ```json
 {"case_id": "MP-2026-000123", "status": "PENDING_VERIFICATION", "message": "…"}
+```
+
+### Other account-free case reports
+
+The same verified-mobile token, required `Idempotency-Key`, multipart `report` JSON, optional `photo`, replay response, intake-station routing, staff review, notifications, and privacy rules apply to:
+
+- `POST /api/v1/public/found-persons` using `PublicFoundPersonCreate`;
+- `POST /api/v1/public/lost-items` using `PublicLostItemCreate`;
+- `POST /api/v1/public/found-items` using `PublicFoundItemCreate`.
+
+Every report includes `reporter_name`, `reporter_mobile_number`, optional `reporter_email`, `preferred_locale`, and notification consent fields.
+
+Found person:
+
+<!-- validate: app.schemas.public:PublicFoundPersonCreate -->
+```json
+{
+  "physical_description": "Adult wearing a blue shawl",
+  "approximate_age": 45,
+  "estimated_gender": "FEMALE",
+  "found_location": "Har Ki Pauri help desk",
+  "found_at": "2026-11-07T10:30:00+05:30",
+  "current_care_location": "Har Ki Pauri help desk",
+  "reporter_name": "Ramesh",
+  "reporter_mobile_number": "9876543210"
+}
+```
+
+Lost item:
+
+<!-- validate: app.schemas.public:PublicLostItemCreate -->
+```json
+{
+  "item_category": "BAG",
+  "item_name": "Black backpack",
+  "item_description": "Black backpack containing clothes",
+  "identifying_features": "Orange thread tied to handle",
+  "last_seen_location": "Railway station",
+  "last_seen_at": "2026-11-07T09:00:00+05:30",
+  "reporter_name": "Ramesh",
+  "reporter_mobile_number": "9876543210"
+}
+```
+
+Found item:
+
+<!-- validate: app.schemas.public:PublicFoundItemCreate -->
+```json
+{
+  "item_category": "PHONE",
+  "item_name": "Blue mobile phone",
+  "item_description": "Phone with a cracked corner",
+  "found_location": "Ghat 2",
+  "found_at": "2026-11-07T11:00:00+05:30",
+  "storage_location": "Har Ki Pauri help desk locker",
+  "reporter_name": "Ramesh",
+  "reporter_mobile_number": "9876543210"
+}
 ```
 
 ### Status access — `POST /api/v1/public/status/request-otp` → `verify-otp` → `GET /api/v1/public/cases/{case_id}/status`
@@ -1929,7 +2063,43 @@ Staff Bearer JWT, or citizen status JWT (optionally with `case_id` on register).
 
 Requires `case:review`. Approval may queue `CASE_APPROVED`; rejected/unverified reports are never represented as police-verified.
 
-**Status (Phase 4 public):** Implemented — tested (mock providers). Live MSG91/SMTP/FCM delivery not verified.
+**Status (public portal backend):** All four account-free case types, sightings, status, information, and staff review are implemented with automated coverage. Live MSG91/SMTP/FCM delivery is not verified.
+
+---
+
+## 13c. Mobile synchronization
+
+Detailed client sequencing is in [MOBILE_SYNC.md](../MOBILE_SYNC.md).
+
+- `POST /api/v1/sync/push`: existing JSON batch for `CREATE_CASE`, `UPDATE_CASE`, and `ADD_NOTE`; binary data is never accepted here.
+- `GET /api/v1/sync/pull`: returns case `items` with `cursor`/`next_cursor` plus private `tombstones` with `tombstone_cursor`/`next_tombstone_cursor`. Tombstones contain only `case_id`, `ARCHIVED|SCOPE_REVOKED`, and timestamp, and only for cases previously delivered to that user.
+- `GET /api/v1/sync/status`: device times/backlog/server cursor plus incomplete attachment sessions.
+
+Create a resumable attachment manifest:
+
+<!-- validate: app.schemas.sync:AttachmentUploadSessionCreate -->
+```json
+{
+  "case_id": "7d0c6f0e-3b6a-4c55-9a8e-2f1b7d9c4a11",
+  "device_id": "android-pixel-7-a1b2",
+  "client_record_id": "photo-local-001",
+  "client_id": "install-uuid",
+  "media_type": "PHOTO",
+  "expected_checksum_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_size_bytes": 204800,
+  "original_filename": "child.jpg",
+  "declared_content_type": "image/jpeg"
+}
+```
+
+Upload/finalize lifecycle:
+
+1. `POST /api/v1/sync/attachments/sessions` → `OPEN` (same manifest replays the session).
+2. `PUT /api/v1/sync/attachments/sessions/{id}/content?offset={bytes_received}` with multipart `file`.
+3. Repeat until `READY`; an incorrect offset returns `409 upload_offset_mismatch`.
+4. `POST /api/v1/sync/attachments/sessions/{id}/finalize`.
+
+Finalize verifies exact size and SHA-256, then reuses signature validation, private quarantine, malware scanning, attachment idempotency, and audited promotion. It returns `AttachmentUploadFinalizeResponse {session, attachment, replayed}`. Checksum failure returns `422 upload_checksum_mismatch` and creates no attachment. `DELETE` aborts an incomplete session.
 
 ---
 
@@ -1941,12 +2111,12 @@ Every `code` the backend can return, by HTTP status. Codes are stable identifier
 |---|---|
 | 401 | `unauthenticated` (no/non-bearer header), `token_expired`, `invalid_token`, `session_revoked`, `invalid_credentials`, `invalid_refresh_token` |
 | 403 | `permission_denied`, `station_scope`, `self_lockout`, `separation_of_duties`, `mfa_enrollment_required`, `step_up_required` |
-| 404 | `not_found` (unknown route), `case_not_found`, `note_not_found`, `attachment_not_found`, `contact_not_found`, `match_not_found`, `station_not_found`, `user_not_found`, `location_not_found`, `legal_hold_not_found`, `retention_run_not_found` |
+| 404 | `not_found` (unknown route), `case_not_found`, `note_not_found`, `attachment_not_found`, `upload_session_not_found`, `contact_not_found`, `match_not_found`, `handover_not_found`, `station_not_found`, `user_not_found`, `location_not_found`, `legal_hold_not_found`, `retention_run_not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `case_changed`, `case_closed`, `case_inactive`, `case_anonymized`, `already_assigned`, `assignee_required`, `invalid_status_transition`, `invalid_custody_transition`, `custody_not_released`, `duplicate_match`, `match_already_reviewed`, `match_not_confirmed` (revoke), `case_not_confirmable`, `conflicting_confirmed_match`, `case_not_matchable`, `attachment_not_available`, `idempotency_key_reused`, `idempotency_retry`, `duplicate`, `username_taken`, `email_taken`, `registration_conflict`, `location_code_taken`, `mfa_disabled`, `mfa_already_enabled`, `mfa_enrollment_missing`, `two_person_rule`, `retention_run_state`, `legal_hold_released`, `execute_via_retention_task` |
+| 409 | `case_changed`, `case_closed`, `case_inactive`, `case_anonymized`, `already_assigned`, `assignee_required`, `invalid_status_transition`, `invalid_custody_transition`, `custody_not_released`, `handover_session_open`, `handover_already_completed`, `handover_state`, `handover_changed`, `upload_session_limit`, `upload_session_state`, `upload_session_expired`, `upload_offset_mismatch`, `upload_staging_mismatch`, `duplicate_match`, `match_already_reviewed`, `match_not_confirmed` (revoke), `case_not_confirmable`, `conflicting_confirmed_match`, `case_not_matchable`, `attachment_not_available`, `idempotency_key_reused`, `idempotency_retry`, `duplicate`, `username_taken`, `email_taken`, `registration_conflict`, `location_code_taken`, `mfa_disabled`, `mfa_already_enabled`, `mfa_enrollment_missing`, `two_person_rule`, `retention_run_state`, `legal_hold_released`, `execute_via_retention_task` |
 | 413 | `payload_too_large` |
 | 415 | `unsupported_media_type`, `media_type_mismatch`, `content_type_mismatch` |
-| 422 | `validation_failed` (general schema; `details` = list), `validation_error` (registration), `station_required`, `invalid_station`, `invalid_location`, `coordinates_out_of_area`, `coordinate_source_required`, `required_field`, `invalid_assignee`, `match_required`, `invalid_match`, `match_not_confirmed` (status change), `verification_required`, `safeguarding_evidence_required`, `storage_location_required`, `handover_required`, `blank_note`, `correction_target_required`, `unexpected_correction_target`, `incompatible_case_types`, `invalid_idempotency_key`, `empty_file`, `malware_detected`, `invalid_current_password`, `weak_password`, `badge_required`, `invalid_sector`, `radius_too_large`, `invalid_bbox`, `bbox_too_large`, `unsupported_locale`, `invalid_phone`, `invalid_range`, `range_too_large`, `mfa_code_invalid` |
+| 422 | `validation_failed` (general schema; `details` = list), `validation_error` (registration), `station_required`, `invalid_station`, `invalid_location`, `coordinates_out_of_area`, `coordinate_source_required`, `required_field`, `invalid_assignee`, `match_required`, `invalid_match`, `match_not_confirmed` (status change), `verification_required`, `safeguarding_evidence_required`, `handover_not_completed`, `identity_document_required`, `upload_checksum_mismatch`, `storage_location_required`, `handover_required`, `blank_note`, `correction_target_required`, `unexpected_correction_target`, `incompatible_case_types`, `invalid_idempotency_key`, `empty_file`, `malware_detected`, `invalid_current_password`, `weak_password`, `badge_required`, `invalid_sector`, `radius_too_large`, `invalid_bbox`, `bbox_too_large`, `unsupported_locale`, `invalid_phone`, `invalid_range`, `range_too_large`, `mfa_code_invalid` |
 | 429 | `too_many_requests` (`details.policy`: `login`, `refresh`, `password_change`, `upload`, `case_create`, `search`, `general`; `Retry-After`), `rate_limit_exceeded` (`details.policy = "register"`; `Retry-After`), `account_temporarily_locked` |
 | 500 | `internal_error` |
 | 503 | `rate_limiter_unavailable` (`Retry-After`), `storage_unavailable`, `service_unavailable` |
@@ -1963,12 +2133,12 @@ Every `code` the backend can return, by HTTP status. Codes are stable identifier
 | `password_change` | change-password, admin `POST /users/{id}/reset-password` | 10 per hour | user |
 | `forgot_password` | `POST /auth/forgot-password` | 10 per hour | client IP, fail-closed |
 | `reset_password` | `POST /auth/reset-password` | 20 per hour | client IP, fail-closed |
-| `upload` | `POST /cases/{id}/attachments` | 30 | user |
+| `upload` | `POST /cases/{id}/attachments`, `PUT /sync/attachments/sessions/{id}/content` | 30 | user |
 | `case_create` | `POST /cases/{type}` | 60 | user |
 | `search` | `GET /cases`, `/cases/{type}`, `/cases/nearby`, `/cases/map` | 180 | user |
 | `general` | every `/api/v1` request (in addition) | 600 | user (IP if unauthenticated) |
 | `public_otp` | `/public/otp/*`, `/public/status/*-otp` | `RATE_LIMIT_PUBLIC_OTP_PER_MINUTE` (default 10) | client IP (+ recipient hash in OTP service) |
-| `public_submit` | `/public/missing-persons`, `/public/sightings` | `RATE_LIMIT_PUBLIC_SUBMIT_PER_MINUTE` (default 20) | client IP |
+| `public_submit` | `/public/{missing-persons,found-persons,lost-items,found-items}`, `/public/sightings` | `RATE_LIMIT_PUBLIC_SUBMIT_PER_MINUTE` (default 20) | client IP, fail-closed |
 | `public_status` | `/public/cases/{id}/status` | `RATE_LIMIT_PUBLIC_STATUS_PER_MINUTE` (default 30) | client IP |
 
 No `X-RateLimit-*` headers are sent; only `Retry-After` on 429.

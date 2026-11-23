@@ -34,6 +34,21 @@ SENSITIVE_KEYS = frozenset(
         "msg91_auth_key",
         "smtp_password",
         "fcm_credentials_json",
+        "claimant_ciphertext",
+        "claimant_full_name",
+        "claimant_mobile_number",
+        "claimant_address",
+        "identity_document_reference",
+        "witness_ciphertext",
+        "witness_full_name",
+        "witness_mobile_number",
+        "witness_statement",
+        "verification_ciphertext",
+        "verification_evidence",
+        "acknowledgement_ciphertext",
+        "acknowledgement",
+        "rejection_ciphertext",
+        "rejection_reason",
     }
 )
 
@@ -60,6 +75,10 @@ class AuditAction(StrEnum):
     CASE_CLOSED = "CASE_CLOSED"
     CASE_REOPENED = "CASE_REOPENED"
     CUSTODY_CHANGED = "CUSTODY_CHANGED"
+    HANDOVER_CREATED = "HANDOVER_CREATED"
+    HANDOVER_VERIFIED = "HANDOVER_VERIFIED"
+    HANDOVER_REJECTED = "HANDOVER_REJECTED"
+    HANDOVER_COMPLETED = "HANDOVER_COMPLETED"
     CONTACT_UPDATED = "CONTACT_UPDATED"
     CONTACT_VIEWED = "CONTACT_VIEWED"
     NOTE_ADDED = "NOTE_ADDED"
@@ -98,6 +117,10 @@ class AuditAction(StrEnum):
     SYNC_PUSH = "SYNC_PUSH"
     SYNC_PULL = "SYNC_PULL"
     SYNC_CONFLICT = "SYNC_CONFLICT"
+    SYNC_TOMBSTONE_EMITTED = "SYNC_TOMBSTONE_EMITTED"
+    SYNC_ATTACHMENT_SESSION_CREATED = "SYNC_ATTACHMENT_SESSION_CREATED"
+    SYNC_ATTACHMENT_SESSION_FINALIZED = "SYNC_ATTACHMENT_SESSION_FINALIZED"
+    SYNC_ATTACHMENT_SESSION_ABORTED = "SYNC_ATTACHMENT_SESSION_ABORTED"
     PUBLIC_OTP_REQUESTED = "PUBLIC_OTP_REQUESTED"
     PUBLIC_OTP_VERIFIED = "PUBLIC_OTP_VERIFIED"
     PUBLIC_OTP_FAILED = "PUBLIC_OTP_FAILED"

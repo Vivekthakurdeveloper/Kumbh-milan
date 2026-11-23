@@ -20,12 +20,12 @@ Gap IDs are stable and are cited from the other documents in this folder.
 | ID | Feature | Priority | Class | Blocks screen | Status |
 |---|---|---|---|---|---|
 | G-15 | `language` accepts 200 chars, database stores 100 → server error | **P0** | Mandatory (defect) | Registration, edit (persons) | **Resolved** (schema max 100) |
-| G-16 | CSV export headers not readable cross-origin | P0 if cross-origin, else none | Mandatory (deployment) | Reports | Open |
-| G-17 | `X-Step-Up-Code` blocked by CORS | P0 if `MFA_MODE=totp` and cross-origin | Mandatory (deployment) | User management, retention | Open |
+| G-16 | CSV export headers not readable cross-origin | P0 if cross-origin, else none | Mandatory (deployment) | Reports | **Resolved** |
+| G-17 | `X-Step-Up-Code` blocked by CORS | P0 if `MFA_MODE=totp` and cross-origin | Mandatory (deployment) | User management, retention | **Resolved** |
 | G-1 | Match review queue across cases | P1 | Mandatory | Matching queue, dashboard | **Resolved** (`GET /matches`) |
-| G-2 | Claimant / handover record and reunification record | P1 | Mandatory | Reunification, custody | Open |
+| G-2 | Claimant / handover record and reunification record | P1 | Mandatory | Reunification, custody | **Resolved in worktree; rollout and DB regression pending** |
 | G-3 | Resolve user ids to display names for non-admins | P1 | Mandatory | Case details, lists | **Resolved** (`GET /users/directory`) |
-| G-7 | Custody history visible to case handlers | P1 | Mandatory | Custody, case details | Open |
+| G-7 | Custody history visible to case handlers | P1 | Mandatory | Custody, case details | **Resolved** (`CaseHistory.custody_history`) |
 | G-9 | Real SMS/WhatsApp delivery to families | P1 (P0 if family messaging is launch scope, Q-4) | Mandatory if in scope | Family notifications | Open |
 | G-14 | `CaseSummary.location_id` always `null` | P1 | Mandatory (defect) | Search, nearby, matching | **Resolved** (`to_summary` sets it; age/gender also added) |
 | G-4 | Unassign, team assignment, assign to help desk | P2 | Optional | Assign | Open |
@@ -34,14 +34,14 @@ Gap IDs are stable and are cited from the other documents in this folder.
 | G-10 | More list filters (location_id, sector, custody, reporter) | P2 | Optional | Case lists | Open |
 | G-11 | More sort orders (urgency, event time) | P2 | Optional | Case lists | Open |
 | G-12 | Duplicate-registration detection | P2 | Optional | Registration | Open |
-| G-19 | Staff in-app notifications | P2 | Optional | Staff notifications | Open |
+| G-19 | Staff in-app notifications | P2 | Optional | Staff notifications | Partial — list/read feed exists; unread count and broader event coverage remain |
 | G-21 | Additional reports and aggregates | P2 | Optional | Reports | Open |
 | G-6 | Supervisor approval and assignee notification | P3 | Optional | Assign | Open |
-| G-13 | Self-service password reset | P3 | Optional | Login | **Resolved** (`POST /auth/forgot-password`, `POST /auth/reset-password`; email via SMTP, SMS needs a provider) |
+| G-13 | Self-service password reset | P3 | Optional | Login | **Resolved** (`POST /auth/forgot-password`, `POST /auth/reset-password`; SMTP email; SMS adapter requires approved provider/DLT configuration) |
 | G-18 | Discoverable MFA mode | P3 | Optional | Profile | Open |
 | G-20 | Realtime updates (SSE/WebSocket) | P3 | Optional | Dashboard, lists | Open |
-| G-22 | Per-case activity timeline for non-admins | P3 | Optional | Case details | Open |
-| G-23 | Photo-based or similarity matching | P3 | Optional | Matching | Open |
+| G-22 | Per-case activity timeline for non-admins | P3 | Optional | Case details | Partial — status, assignments, and field changes are available; custody/notes/media remain separate |
+| G-23 | Photo-based or similarity matching | P3 | Optional | Matching | **Resolved in code; production approval/calibration blocked** |
 | G-24 | Runtime system settings API | P3 | Optional | System settings | Open |
 
 ### Resolved in Phase 1 portal backend work
@@ -71,26 +71,21 @@ Gap IDs are stable and are cited from the other documents in this folder.
 
 ## 3. Deployment-dependent gaps
 
-### G-16 — Export headers not exposed via CORS
+### G-16 — Export headers not exposed via CORS — **RESOLVED**
 
 | Field | Detail |
 |---|---|
-| Current | `expose_headers` is `X-Request-ID, Idempotent-Replayed, Retry-After` (`backend/app/main.py`). `X-Export-Rows`, `X-Export-Truncated`, and `Content-Disposition` are set by the CSV endpoint but cannot be read cross-origin. |
-| Impact | A cross-origin frontend cannot tell users that an export was truncated at 1000 rows. |
-| Suggested impl | Add the three headers to `expose_headers`, or deploy same-origin. |
-| Priority | P0 if the frontend is on a different origin; none if same-origin |
-| Acceptance criteria | From the frontend origin, `response.headers.get("X-Export-Truncated")` returns `"true"` or `"false"`. |
+| Resolution | `Content-Disposition`, `X-Export-Rows`, and `X-Export-Truncated` are exposed by CORS in `backend/app/main.py`. |
+| Verification | `test_cors_exposes_export_metadata_to_approved_origin` verifies the browser-visible response contract. |
+| Priority | Was P0 when the frontend is on a different origin. |
 
-### G-17 — Step-up header not allowed by CORS
+### G-17 — Step-up header not allowed by CORS — **RESOLVED**
 
 | Field | Detail |
 |---|---|
-| Current | The middleware reads `X-Step-Up-Code` for admin password reset and retention execute when `MFA_MODE=totp`, but `allow_headers` does not include it. |
-| Impact | Preflight fails; those two admin actions are impossible cross-origin with TOTP enabled. |
-| Suggested impl | Add `X-Step-Up-Code` to `allow_headers`, or deploy same-origin. |
-| Priority | P0 if `MFA_MODE=totp` and cross-origin; otherwise none |
-| Dependencies | Q-5, Q-6 |
-| Acceptance criteria | Cross-origin `POST /users/{id}/reset-password` with `X-Step-Up-Code` passes preflight and returns `204` with a valid code. |
+| Resolution | `X-Step-Up-Code` is allowed by CORS in `backend/app/main.py`; the server still validates the TOTP code and session when step-up is enabled. |
+| Verification | `test_cors_allows_step_up_header_for_approved_origin` covers the positive preflight, and the CORS contract also rejects unapproved origins. |
+| Priority | Was P0 when `MFA_MODE=totp` and the frontend is cross-origin. |
 
 ## 4. Mandatory functional gaps
 
@@ -101,18 +96,18 @@ Gap IDs are stable and are cited from the other documents in this folder.
 | Resolution | `GET /api/v1/matches` returns `Page[MatchQueueItem]` with `left_case` / `right_case` summaries, scoped like the dashboard count, default `status=PROPOSED`. Covered by Phase 1 portal tests. |
 | Priority | Was P1 |
 
-### G-2 — Claimant and reunification record
+### G-2 — Claimant and reunification record — **RESOLVED IN WORKTREE**
 
 | Field | Detail |
 |---|---|
 | Required behaviour | When a person is reunified or an item returned, record who collected (name, relationship, ID document type and reference, handover time, staff witness), linked to both cases. |
-| Current | Free text: `verification_evidence` on the status change, `recipient_acknowledgement` on custody release, and notes. The resolving match id is stored. |
-| Missing | Structured claimant entity, reunification entity, retrieval endpoint. |
-| Impact | No structured safeguarding record for handing over children or vulnerable adults; reports cannot count reunifications. |
-| Suggested impl | `POST /cases/{id}/handovers` (claimant fields, encrypted like contact details, `match_id`), `GET /cases/{id}/handovers`; require one before `RESOLVED` for person cases. |
-| Priority | P1 |
-| Dependencies | Q-3 (mandatory fields), data protection review |
-| Acceptance criteria | Resolving a person case without a handover record returns `422`; the record is audited and visible only to `case:contact_read` holders. |
+| Resolution | Revision `0014` adds `case_handovers` with claimant, document type/reference, optional witness, verification/rejection, physical handover, acknowledgement, case/match links, optimistic versioning, and duplicate-completion protection. |
+| APIs | Police/admin create, list, read, verify/reject, complete, and read lifecycle history under `/cases/{case_id}/handovers`. |
+| Security | Sensitive values are encrypted at rest, omitted from audit payloads, anonymized by retention, and protected by `handover:read` / `handover:manage`. |
+| Workflow | `HANDOVER_REQUIRED_FOR_RESOLVE` can require completion before a person case reaches `RESOLVED`; the compatibility default is false until staff clients are deployed. |
+| Priority | Was P1 |
+| Remaining gate | Migration/full database regression, client rollout, approved production claimant/document policy, then enable the resolution gate. |
+| Verification | Lifecycle, rejection, idempotency, authorization, item custody, encrypted storage, history, and resolution-gate tests are added. |
 
 ### G-3 — User display names for non-admins — **RESOLVED**
 
@@ -121,16 +116,16 @@ Gap IDs are stable and are cited from the other documents in this folder.
 | Resolution | `GET /api/v1/users/directory?ids=…` (1–100 ids) returns `id`, `full_name`, `role`, `station_id` for any role with `case:read`. Covered by `test_user_directory_returns_minimal_fields_for_all_roles`. |
 | Priority | Was P1 |
 
-### G-7 — Custody history
+### G-7 — Custody history — **RESOLVED**
 
 | Field | Detail |
 |---|---|
 | Required behaviour | Chain of custody (who moved the item where, when, released to whom) visible to case handlers. |
-| Current | Only the current state is on the case. Each change is an audit event (`CUSTODY_CHANGED`), readable only with `audit:read` (admin). `GET /cases/{id}/history` covers status and assignment only. |
-| Missing | A custody history endpoint or inclusion in `CaseHistory`. |
-| Suggested impl | Add `custody` entries to `GET /cases/{id}/history`, from a new custody-event table or a filtered view of audit events. |
-| Priority | P1 |
-| Acceptance criteria | After two transfers and a release, police see three entries with actor, time, status, storage location. |
+| Resolution | `GET /cases/{id}/history` includes chronological `custody_history` entries projected from append-only `CUSTODY_CHANGED` audit events. Each entry records actor, role, time, previous/new status, reason, storage location, and whether handover evidence was recorded. |
+| Privacy | PUBLIC callers receive an empty custody history. Handover acknowledgement text is not copied into history. |
+| Compatibility | Older audit rows remain readable but may have `storage_location: null`; no historical location is invented. |
+| Priority | Was P1 |
+| Verification | Workflow coverage records two transfers and a release and verifies police/help-desk visibility without exposing acknowledgement text. |
 
 ### G-9 — Family message delivery
 
@@ -157,18 +152,18 @@ Gap IDs are stable and are cited from the other documents in this folder.
 | G-12 | Duplicate detection | Only `Idempotency-Key` prevents double submit by the same user. Automatic matching never compares two cases of the same type. | Same-type similarity check on create returning `possible_duplicates`. | Registering the same lost child twice at two desks surfaces the first case. |
 | G-13 | Self-service password reset | Resolved: emailed or texted one-time code, see the reference. | — | — |
 | G-18 | MFA discovery | Client learns via `409 mfa_disabled`. | `mfa_mode` and `mfa_enabled` in `GET /auth/me`. | — |
-| G-19 | Staff notifications | None. | Notification feed per user, unread count. | — |
+| G-19 | Staff notifications | `GET /staff-notifications` and mark-read exist for face-candidate events. | Add unread count and approved assignment/case/grievance event coverage. | — |
 | G-20 | Realtime | Polling only. | SSE/WebSocket for case changes and new matches. | — |
 | G-21 | Reports | One CSV: 6 columns, ≤31 days, ≤1000 rows, `created_from`/`created_to` only. | More filters, aggregates, PDF, scheduled exports. | — |
-| G-22 | Case activity timeline | `/history` gives status and assignment changes; the full audit is admin-only. | Case-scoped, redacted audit timeline for case handlers. | — |
-| G-23 | Photo matching | Rule-based matching on attributes, time, location; photos not used. | Optional image similarity (privacy review required). | — |
+| G-22 | Case activity timeline | `/history` gives status, assignment, role-redacted field changes, and custody events; the full audit is admin-only. | Add notes, attachment, and other approved operational events to one case-scoped timeline. | — |
+| G-23 | Photo matching | OpenCV YuNet/SFace candidates, encrypted embeddings, match photos, staff notifications, and two-officer confirmation are implemented. | Production use still requires biometric approval, real-event calibration, and key-rotation readiness. | — |
 | G-24 | Settings API | Configuration is environment variables. | Admin API for selected runtime settings. | — |
 
 ## 6. Dependencies between gaps
 
 - G-6 depends on G-19 for notifying the assignee.
 - G-2 should precede report metrics on reunifications (G-21).
-- G-16 and G-17 disappear if the frontend is deployed same-origin (Q-5).
+- G-16 and G-17 are resolved; same-origin deployment is still recommended to reduce browser-policy complexity (Q-5).
 
 ## 7. Open questions
 

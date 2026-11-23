@@ -247,11 +247,13 @@ def test_user_directory_returns_minimal_fields_for_all_roles(client, actors):
         body = r.json()
         assert {row["id"] for row in body} == {str(actors.police.id), str(actors.helpdesk.id)}
         for row in body:
-            assert set(row.keys()) == {"id", "full_name", "role", "station_id"}
+            assert set(row.keys()) == {"id", "full_name", "role", "role_label", "station_id"}
             assert "email" not in row
             assert "phone_number" not in row
             assert "username" not in row
             assert "police_badge_number" not in row
+        labels = {row["role"]: row["role_label"] for row in body}
+        assert labels == {"POLICE_OFFICER": "Police Officer", "HELP_DESK_OPERATOR": "Help Desk"}
 
 
 def test_assignable_officers_include_username_and_role_without_contact_fields(client, actors):
@@ -260,8 +262,11 @@ def test_assignable_officers_include_username_and_role_without_contact_fields(cl
     rows = {row["username"]: row for row in r.json()}
     assert set(rows) == {"police", "police2"}  # own station only
     for row in rows.values():
-        assert set(row.keys()) == {"id", "full_name", "username", "role", "police_badge_number", "station_id"}
+        assert set(row.keys()) == {
+            "id", "full_name", "username", "role", "role_label", "police_badge_number", "station_id",
+        }
         assert row["role"] == "POLICE_OFFICER"
+        assert row["role_label"] == "Police Officer"
     assert rows["police"]["police_badge_number"] == "UK-1"
 
     denied = client.get(f"{API}/users/assignable-officers", headers=actors.helpdesk.headers)

@@ -10,6 +10,19 @@ class Role(StrEnum):
     PUBLIC = "PUBLIC"
 
 
+ROLE_LABELS: dict[Role, str] = {
+    Role.ADMIN: "Administrator",
+    Role.POLICE_OFFICER: "Police Officer",
+    Role.HELP_DESK_OPERATOR: "Help Desk",
+    Role.PUBLIC: "Citizen",
+}
+
+
+def role_label(role: Role | str) -> str:
+    """Canonical human-readable role label for every API response."""
+    return ROLE_LABELS[Role(role)]
+
+
 class StationKind(StrEnum):
     POLICE_STATION = "POLICE_STATION"
     HELP_DESK = "HELP_DESK"
@@ -60,6 +73,20 @@ class PushPlatform(StrEnum):
     IOS = "IOS"
 
 
+class SyncTombstoneReason(StrEnum):
+    ARCHIVED = "ARCHIVED"
+    SCOPE_REVOKED = "SCOPE_REVOKED"
+
+
+class AttachmentUploadSessionStatus(StrEnum):
+    OPEN = "OPEN"
+    READY = "READY"
+    FINALIZED = "FINALIZED"
+    FAILED = "FAILED"
+    ABORTED = "ABORTED"
+    EXPIRED = "EXPIRED"
+
+
 class PublicInformationKind(StrEnum):
     HELP_DESK = "HELP_DESK"
     EMERGENCY_CONTACT = "EMERGENCY_CONTACT"
@@ -101,6 +128,33 @@ class CustodyStatus(StrEnum):
     IN_CUSTODY = "IN_CUSTODY"
     TRANSFERRED = "TRANSFERRED"
     RELEASED = "RELEASED"
+
+
+class HandoverKind(StrEnum):
+    PERSON_REUNIFICATION = "PERSON_REUNIFICATION"
+    ITEM_RETURN = "ITEM_RETURN"
+
+
+class HandoverStatus(StrEnum):
+    CLAIMANT_RECORDED = "CLAIMANT_RECORDED"
+    VERIFIED = "VERIFIED"
+    COMPLETED = "COMPLETED"
+    REJECTED = "REJECTED"
+
+
+class IdentityVerificationMethod(StrEnum):
+    GOVERNMENT_ID = "GOVERNMENT_ID"
+    FAMILY_CORROBORATION = "FAMILY_CORROBORATION"
+    PHOTO_OR_MARKS = "PHOTO_OR_MARKS"
+    OTHER = "OTHER"
+
+
+class IdentityDocumentType(StrEnum):
+    AADHAAR = "AADHAAR"
+    VOTER_ID = "VOTER_ID"
+    PASSPORT = "PASSPORT"
+    DRIVING_LICENCE = "DRIVING_LICENCE"
+    OTHER = "OTHER"
 
 
 class NoteType(StrEnum):

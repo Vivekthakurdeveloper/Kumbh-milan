@@ -30,8 +30,8 @@ from app.common.errors import ServiceUnavailable, ValidationFailed
 from app.common.time import utcnow
 from app.config import Settings, get_settings
 from app.models import LoginAttempt, PasswordResetToken, User
-from app.models.enums import NotificationChannel
-from app.notifications import get_provider, mask, normalise_phone
+from app.models.enums import NotificationChannel, NotificationTemplate
+from app.notifications import get_provider, mask, normalise_phone, render
 from app.notifications.email import OutgoingEmail, get_email_sender
 
 logger = logging.getLogger("kumbh_setu.password_reset")
@@ -50,6 +50,9 @@ class Delivery:
     subject: str
     body: str
     idempotency_key: str
+    template: NotificationTemplate | None = None
+    otp: str | None = None
+    locale: str | None = None
 
 
 def channels_available() -> dict[str, bool]:
@@ -171,14 +174,23 @@ def request_reset(
     else:
         destination = normalise_phone(user.phone_number or "", cc) or ""
         subject = ""
-        body = f"Kumbh Setu: password reset code {code}. Valid {minutes} min. Do not share it with anyone."
+        body = render(NotificationTemplate.PASSWORD_RESET, "en", otp=code)
         hint = mask(destination)
     record_audit(
         db, action=AuditAction.PASSWORD_RESET_REQUESTED, entity_type="user", entity_id=user.id,
         actor_user_id=None, after={"channel": channel, "sent_to": hint},
     )
     db.commit()
-    return Delivery(channel, destination, subject, body, idempotency_key=f"pwreset-{token.id}")
+    return Delivery(
+        channel,
+        destination,
+        subject,
+        body,
+        idempotency_key=f"pwreset-{token.id}",
+        template=NotificationTemplate.PASSWORD_RESET if channel == SMS else None,
+        otp=code if channel == SMS else None,
+        locale="en" if channel == SMS else None,
+    )
 
 
 def deliver(delivery: Delivery) -> None:
@@ -190,6 +202,9 @@ def deliver(delivery: Delivery) -> None:
             get_provider().send(
                 channel=NotificationChannel.SMS, to=delivery.destination, body=delivery.body,
                 idempotency_key=delivery.idempotency_key,
+                template=delivery.template,
+                locale=delivery.locale,
+                extras={"otp": delivery.otp} if delivery.otp is not None else None,
             )
     except Exception as exc:  # noqa: BLE001 - never surface provider details or the message to anyone
         logger.error(

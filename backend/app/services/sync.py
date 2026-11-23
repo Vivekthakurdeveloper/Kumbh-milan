@@ -19,11 +19,13 @@ from app.auth.scope import case_visibility_clause
 from app.common.errors import AppError, NotFound, ValidationFailed
 from app.common.time import utcnow
 from app.config import get_settings
-from app.models import Case, SyncDevice, User
+from app.models import Case, SyncDeliveredCase, SyncDevice, SyncTombstone, User
+from app.models.enums import SyncTombstoneReason
 from app.schemas.sync import (
     SyncOperation,
     SyncPullItem,
     SyncPullResponse,
+    SyncPullTombstone,
     SyncPushRecord,
     SyncPushRequest,
     SyncPushResponse,
@@ -49,6 +51,147 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
         return datetime.fromisoformat(raw["t"]), uuid.UUID(raw["id"])
     except Exception as exc:  # noqa: BLE001 - any malformed cursor is a client error
         raise ValidationFailed("Invalid sync cursor", code="invalid_cursor") from exc
+
+
+def _record_deliveries(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    case_ids: set[uuid.UUID],
+    delivered_at: datetime | None = None,
+) -> None:
+    if not case_ids:
+        return
+    delivered_at = delivered_at or utcnow()
+    values = [
+        {
+            "user_id": user_id,
+            "case_id": case_id,
+            "first_delivered_at": delivered_at,
+            "last_delivered_at": delivered_at,
+            "is_currently_delivered": True,
+            "revoked_at": None,
+        }
+        for case_id in case_ids
+    ]
+    stmt = insert(SyncDeliveredCase).values(values)
+    db.execute(
+        stmt.on_conflict_do_update(
+            index_elements=[SyncDeliveredCase.user_id, SyncDeliveredCase.case_id],
+            set_={
+                "last_delivered_at": delivered_at,
+                "is_currently_delivered": True,
+                "revoked_at": None,
+            },
+        )
+    )
+
+
+def _reconcile_tombstones(db: Session, user: User) -> int:
+    delivered = list(
+        db.scalars(
+            select(SyncDeliveredCase).where(
+                SyncDeliveredCase.user_id == user.id,
+                SyncDeliveredCase.is_currently_delivered.is_(True),
+            )
+        )
+    )
+    if not delivered:
+        return 0
+    case_ids = [row.case_id for row in delivered]
+    visible_ids = set(
+        db.scalars(
+            select(Case.id).where(
+                Case.id.in_(case_ids),
+                case_visibility_clause(user),
+                Case.archived_at.is_(None),
+            )
+        )
+    )
+    cases = {
+        case.id: case
+        for case in db.scalars(select(Case).where(Case.id.in_(case_ids)))
+    }
+    now = utcnow()
+    emitted = 0
+    for ledger in delivered:
+        if ledger.case_id in visible_ids:
+            continue
+        case = cases.get(ledger.case_id)
+        if case is None:
+            continue
+        reason = (
+            SyncTombstoneReason.ARCHIVED
+            if case.archived_at is not None
+            else SyncTombstoneReason.SCOPE_REVOKED
+        )
+        occurred_at = case.archived_at or now
+        tombstone = SyncTombstone(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            case_id=case.id,
+            reason=reason,
+            occurred_at=occurred_at,
+        )
+        db.add(tombstone)
+        ledger.is_currently_delivered = False
+        ledger.revoked_at = occurred_at
+        record_audit(
+            db,
+            action=AuditAction.SYNC_TOMBSTONE_EMITTED,
+            entity_type="sync_tombstone",
+            entity_id=tombstone.id,
+            actor_user_id=None,
+            case=case,
+            after={"user_id": user.id, "reason": reason},
+        )
+        emitted += 1
+    return emitted
+
+
+def _pull_tombstones(
+    db: Session,
+    user: User,
+    *,
+    cursor: str | None,
+    limit: int,
+    cutoff: datetime,
+) -> tuple[list[SyncPullTombstone], str | None, bool]:
+    conditions = [
+        SyncTombstone.user_id == user.id,
+        SyncTombstone.occurred_at <= cutoff,
+    ]
+    if cursor:
+        cursor_at, cursor_id = _decode_cursor(cursor)
+        conditions.append(
+            or_(
+                SyncTombstone.occurred_at > cursor_at,
+                and_(
+                    SyncTombstone.occurred_at == cursor_at,
+                    SyncTombstone.id > cursor_id,
+                ),
+            )
+        )
+    rows = list(
+        db.scalars(
+            select(SyncTombstone)
+            .where(*conditions)
+            .order_by(SyncTombstone.occurred_at, SyncTombstone.id)
+            .limit(limit + 1)
+        )
+    )
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = [
+        SyncPullTombstone(
+            case_id=row.case_id,
+            reason=row.reason,
+            server_updated_at=row.occurred_at,
+        )
+        for row in rows
+    ]
+    next_cursor = _encode_cursor(rows[-1].occurred_at, rows[-1].id) if rows else None
+    return items, next_cursor, has_more
 
 
 def _upsert_device(
@@ -366,6 +509,22 @@ def push(
         else:
             failed += 1
 
+    _record_deliveries(
+        db,
+        user_id=user.id,
+        case_ids={
+            result.case_id
+            for result in results
+            if result.case_id is not None
+            and result.outcome
+            in (
+                SyncRecordOutcome.SYNCED,
+                SyncRecordOutcome.DUPLICATE,
+                SyncRecordOutcome.CONFLICT,
+            )
+        },
+    )
+
     device = db.scalar(
         select(SyncDevice).where(SyncDevice.user_id == user.id, SyncDevice.device_id == request.device_id)
     )
@@ -418,6 +577,7 @@ def pull(
     *,
     device_id: str,
     cursor: str | None,
+    tombstone_cursor: str | None,
     limit: int,
     client_id: str | None = None,
 ) -> SyncPullResponse:
@@ -425,7 +585,17 @@ def pull(
     settings = get_settings()
     limit = max(1, min(limit, settings.sync_max_batch))
     lag = timedelta(seconds=settings.sync_pull_lag_seconds)
+    emitted_tombstones = _reconcile_tombstones(db, user)
+    if emitted_tombstones:
+        db.flush()
     cutoff = utcnow() - lag
+    tombstones, next_tombstone_cursor, has_more_tombstones = _pull_tombstones(
+        db,
+        user,
+        cursor=tombstone_cursor,
+        limit=limit,
+        cutoff=cutoff,
+    )
 
     conditions = [
         case_visibility_clause(user),
@@ -470,6 +640,11 @@ def pull(
     if items:
         last = rows[-1]
         next_cursor = _encode_cursor(last.sync_changed_at, last.id)
+    _record_deliveries(
+        db,
+        user_id=user.id,
+        case_ids={row.id for row in rows},
+    )
 
     device = _upsert_device(db, user, device_id=device_id, client_id=client_id)
     device.last_pull_at = utcnow()
@@ -487,8 +662,12 @@ def pull(
             "device_id": device_id,
             "cursor": cursor,
             "returned": len(items),
+            "tombstones_returned": len(tombstones),
+            "tombstones_emitted": emitted_tombstones,
             "has_more": has_more,
+            "has_more_tombstones": has_more_tombstones,
             "next_cursor": next_cursor,
+            "next_tombstone_cursor": next_tombstone_cursor,
         },
     )
     db.commit()
@@ -498,6 +677,9 @@ def pull(
         next_cursor=next_cursor,
         has_more=has_more,
         server_time=utcnow(),
+        tombstones=tombstones,
+        next_tombstone_cursor=next_tombstone_cursor,
+        has_more_tombstones=has_more_tombstones,
     )
 
 
@@ -511,6 +693,8 @@ def status(
     client_id: str | None = None,
 ) -> SyncStatusResponse:
     require_permission(user, Permission.CASE_READ)
+    from app.services import attachment_sessions as attachment_session_service
+
     device = _upsert_device(
         db,
         user,
@@ -539,4 +723,12 @@ def status(
         failed_count=device.failed_count if device else failed_count,
         server_cursor=current_server_cursor(db, user),
         server_time=utcnow(),
+        attachment_sessions=[
+            attachment_session_service.to_read(row)
+            for row in attachment_session_service.list_device_sessions(
+                db,
+                user,
+                device_id=device_id,
+            )
+        ],
     )

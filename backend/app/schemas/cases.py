@@ -188,7 +188,9 @@ class MissingPersonCreate(CaseCreateCommon, MissingPersonFields):
 
 
 class MissingPersonUpdate(CaseUpdateCommon, MissingPersonFields):
-    pass
+    # PATCH validates an explicitly supplied blank/null name in the service so it can
+    # return the stable Kumbh Setu validation envelope. Omission still means no change.
+    person_name: str | None = Field(None, max_length=200, description="Omit to keep the current name")
 
 
 class MissingPersonDetailsRead(ReadModel, MissingPersonFields):
@@ -257,7 +259,7 @@ class LostItemCreate(CaseCreateCommon, LostItemFields):
 
 
 class LostItemUpdate(CaseUpdateCommon, LostItemFields):
-    pass
+    item_name: str | None = Field(None, max_length=200, description="Omit to keep the current name")
 
 
 class LostItemDetailsRead(ReadModel, LostItemFields):
@@ -289,7 +291,7 @@ class FoundItemCreate(CaseCreateCommon, FoundItemFields):
 
 
 class FoundItemUpdate(CaseUpdateCommon, FoundItemFields):
-    pass
+    item_name: str | None = Field(None, max_length=200, description="Omit to keep the current name")
 
 
 class FoundItemDetailsRead(ReadModel, FoundItemFields):

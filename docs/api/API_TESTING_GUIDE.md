@@ -8,24 +8,25 @@ How to verify the API contracts described in this folder, what has already been 
 
 | Check | Command | Result | Date |
 |---|---|---|---|
-| OpenAPI generated from source | `APP_ENV=local DOCS_ENABLED=true .venv/bin/python -c "…json.dump(app.openapi(), …)"` (from `backend/`) | 88 paths, 110 operations → [openapi.json](./openapi.json) | 2026-11-07 (Phase 4) |
-| Documentation examples validated against backend Pydantic models | `backend/.venv/bin/python docs/api/tools/validate_examples.py` (from repo root) | **62 examples checked, 0 failed** | 2026-11-07 |
+| OpenAPI generated from source | `APP_ENV=local DOCS_ENABLED=true .venv/bin/python -c "…json.dump(app.openapi(), …)"` (from `backend/`) | 104 paths, 127 operations → [openapi.json](./openapi.json) | 2026-11-23 |
+| Documentation examples validated against backend Pydantic models | `backend/.venv/bin/python docs/api/tools/validate_examples.py` (from repo root) | **73 examples checked, 0 failed** | 2026-11-23 |
 | Validator negative check (missing required field, naive datetime, future datetime, invented response field) | ad-hoc script calling the validator functions | All four rejected | 2026-10-29 |
 | Hand-written TypeScript interfaces in the integration guide compared with Pydantic model fields and enum values | ad-hoc script | No missing or extra fields; all enum value sets equal | 2026-10-29 |
 | Schema max lengths vs database column lengths | ad-hoc script over SQLAlchemy metadata | **No mismatch** (`language` fixed; was gap G-15) | 2026-11-05 |
 | Database-free unit tests | `APP_ENV=test JWT_SECRET=<any 32+ char test value> .venv/bin/python -m pytest --noconftest -q tests/test_matching_engine.py tests/test_ratelimit.py` | **17 passed, 2 skipped** (Redis not reachable) | 2026-10-29 |
-| Full pytest suite (Phase 4 public portal) | `backend/.venv/bin/python -m pytest -q --tb=line` | **278 passed, 1 skipped** | 2026-11-07 |
+| Hosted full pytest suite on current `main` (`a60e8c3`) | GitHub Actions `backend` workflow | **379 passed, 1 skipped**; compile and `alembic check` passed | 2026-11-21 |
+| Full programme worktree suite on isolated PostGIS/Redis | `backend/.venv/bin/python -m pytest -q --tb=line` | **413 passed, 1 skipped**; schema `0016`; `alembic check` clean | 2026-11-23 |
 
 ## 2. Existing test evidence
 
 | Suite | Location | Last recorded result | Source |
 |---|---|---|---|
-| pytest (unit, integration, e2e, Phase 1 portal) | `backend/tests/` (19 test files) | 233 passed, 3 skipped (Redis ×2, ClamAV ×1) | `docs/TESTING.md`, `docs/evidence/PHASE1_PORTAL.md` |
+| pytest (unit, integration, e2e, portal, sync, face, registration) | `backend/tests/` | 413 passed, 1 skipped on the programme worktree | `docs/TESTING.md` |
 | Live HTTP QA harness | `qa/api_smoke.py` | 144/144 checks passed on 2026-10-23 (pre–Phase 1 portal endpoints) | `docs/evidence/QA_LOCAL_RUN.md` |
 
 Test files by area: `test_auth.py`, `test_authorization.py`, `test_cases_api.py`, `test_workflow.py`, `test_match_workflow.py`, `test_matching.py`, `test_matching_engine.py`, `test_media.py`, `test_scanning.py`, `test_geo.py`, `test_notifications.py`, `test_retention.py`, `test_ratelimit.py`, `test_observability.py`, `test_platform.py`, `test_database.py`, `test_phase_completion.py`, `test_phase1_portal.py`, `test_e2e_scenarios.py`.
 
-Recorded as not executed by the project: hosted CI, real ClamAV, real notification provider, load test `load/cases.js`.
+Recorded as not executed by the project: real ClamAV, real notification provider delivery, and load test `load/cases.js`.
 
 ## 3. Running the suites locally
 

@@ -9,13 +9,14 @@ from app.models.case import (
 )
 from app.models.face import FaceEmbedding
 from app.models.geo import Location
+from app.models.handover import CaseHandover
 from app.models.notification import Notification, StaffNotification
 from app.models.operations import WorkerHeartbeat
 from app.models.organization import Station, User
 from app.models.public import OtpChallenge, PublicInformationItem, PublicSighting, PushDeviceToken
 from app.models.retention import LegalHold, RetentionRun
 from app.models.security import IdempotencyKey, LoginAttempt, PasswordResetToken, RefreshToken
-from app.models.sync import SyncDevice
+from app.models.sync import AttachmentUploadSession, SyncDeliveredCase, SyncDevice, SyncTombstone
 from app.models.workflow import (
     CaseAssignment,
     CaseAttachment,
@@ -27,10 +28,12 @@ from app.models.workflow import (
 
 __all__ = [
     "AuditEvent",
+    "AttachmentUploadSession",
     "Case",
     "CaseAssignment",
     "CaseAttachment",
     "CaseContact",
+    "CaseHandover",
     "CaseMatch",
     "CaseNote",
     "CaseNumberCounter",
@@ -54,7 +57,9 @@ __all__ = [
     "RetentionRun",
     "StaffNotification",
     "Station",
+    "SyncDeliveredCase",
     "SyncDevice",
+    "SyncTombstone",
     "User",
     "WorkerHeartbeat",
 ]

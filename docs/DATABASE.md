@@ -17,6 +17,9 @@ PostgreSQL 16 and PostGIS. Migrations are linear.
 | 0011 | `PUBLIC` user role and one-time password-reset token foundation |
 | 0012 | Email/SMS password-reset codes (invalidates incompatible outstanding reset tokens only) |
 | 0013 | Nullable user registration profile fields and normalized PUBLIC mobile uniqueness |
+| 0014 | Encrypted structured claimant verification and case handover lifecycle |
+| 0015 | Per-user delivered-case ledger and append-only mobile sync tombstones |
+| 0016 | Resumable offline attachment upload sessions |
 
 `0007` only adds nullable columns and one table, except `users.totp_enabled`, which is `false` for existing rows. It does not rewrite case text. Downgrade would drop those columns. Do not downgrade a database that has stored handover text or TOTP secrets; restore a backup instead.
 
@@ -24,11 +27,15 @@ PostgreSQL 16 and PostGIS. Migrations are linear.
 
 `0011` and `0013` are additive for existing users. The four profile columns in `0013` are nullable, so old staff and PUBLIC rows remain valid. Existing usernames and phone numbers are not rewritten. Before creating the normalized PUBLIC-mobile unique index, the migration checks for duplicate final-ten-digit values and aborts without committing if any exist. `0012` intentionally invalidates only outstanding reset-token rows because the old token format is incompatible.
 
+`0014` is additive and does not backfill free-text verification evidence. `case_handovers` stores encrypted claimant, witness, verification, acknowledgement, and rejection values; links confirmed matches and both cases; and prevents concurrent active or duplicate completed handovers. The runtime role cannot delete handover rows. Do not downgrade after operational handovers exist; restore a reviewed backup instead.
+
+`0015` and `0016` are additive for existing mobile clients. Tombstones are generated only from the delivered-case ledger, so out-of-scope case ids cannot be enumerated. Upload sessions stage bounded private bytes and finalize through the existing attachment quarantine/scanning path.
+
 The isolated copy of the operational volume was upgraded from `0001` to `0007`. `alembic check` on that copy exited 0. PostGIS `geography` columns produce a SQLAlchemy recognition warning and were not reported as a new upgrade operation.
 
 The original volume has not been upgraded. A read-only check on 2026-11-21 confirmed revision `0001`; schema changes must first be proven on a restored copy and backed up before any approved operational upgrade.
 
-Application tables include stations, users, cases and four detail tables, contacts, notes, assignments, status history, matches, attachments, face embeddings, staff notifications, idempotency keys, sessions, login attempts, audit events, locations, legal holds, retention runs, notifications, worker heartbeats, sync devices, OTP challenges, public sightings, push device tokens, and public information items.
+Application tables include stations, users, cases and four detail tables, contacts, notes, assignments, status history, matches, structured handovers, attachments, face embeddings, staff notifications, idempotency keys, sessions, login attempts, audit events, locations, legal holds, retention runs, notifications, worker heartbeats, sync devices, delivered-case ledgers, sync tombstones, attachment upload sessions, OTP challenges, public sightings, push device tokens, and public information items.
 
 ### Public portal (revision `0010`)
 

@@ -6,7 +6,7 @@ import re
 import sqlalchemy as sa
 from alembic import op
 
-APPEND_ONLY_TABLES = ("audit_events", "case_notes", "case_status_history")
+APPEND_ONLY_TABLES = ("audit_events", "case_notes", "case_status_history", "sync_tombstones")
 
 
 def app_role() -> str | None:

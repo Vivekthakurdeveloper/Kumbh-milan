@@ -61,6 +61,8 @@ class Settings(BaseSettings):
         ge=0,
         description="Pull omits changes newer than this lag so a late-committing transaction is never skipped",
     )
+    sync_attachment_session_ttl_hours: int = Field(72, ge=1, le=720)
+    sync_attachment_max_open_sessions_per_device: int = Field(20, ge=1, le=100)
 
     public_intake_user_id: UUID | None = Field(
         None, description="Active HELP_DESK_OPERATOR used as reported_by for verified public submissions"
@@ -104,6 +106,13 @@ class Settings(BaseSettings):
     max_request_bytes: int = 30 * 1024 * 1024
 
     matching_auto_enabled: bool = Field(True, description="Suggest matches after a case is registered or edited")
+    handover_required_for_resolve: bool = Field(
+        False,
+        description=(
+            "Require a completed structured handover before resolving person cases. "
+            "Keep false until staff clients support the handover workflow."
+        ),
+    )
 
     face_matching_enabled: bool = Field(True, description="Analyse person photos and suggest face-based candidates")
     face_engine: Literal["opencv_sface"] = "opencv_sface"

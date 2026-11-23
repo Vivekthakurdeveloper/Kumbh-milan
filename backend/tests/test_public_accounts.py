@@ -299,8 +299,19 @@ def test_public_can_create_all_four_case_types_and_only_see_own(client, actors):
     assert client.get(f"{API}/cases/{created[0]['id']}/notes", headers=headers_b).status_code == 404
     assert client.get(f"{API}/cases/{created[0]['id']}/attachments", headers=headers_b).status_code == 404
 
-    # Owner can read history/notes and upload an attachment.
-    assert client.get(f"{API}/cases/{created[0]['id']}/history", headers=headers_a).status_code == 200
+    # Staff field edits remain in the operational audit trail, not the citizen-facing history.
+    staff_edit = client.patch(
+        f"{API}/cases/missing-persons/{created[0]['id']}",
+        headers=actors.helpdesk.headers,
+        json={"approximate_age": 8},
+    )
+    assert staff_edit.status_code == 200
+
+    # Owner can read status history/notes and upload an attachment, but not old personal field values.
+    owner_history = client.get(f"{API}/cases/{created[0]['id']}/history", headers=headers_a)
+    assert owner_history.status_code == 200
+    assert owner_history.json()["field_changes"] == []
+    assert owner_history.json()["custody_history"] == []
     note = client.post(
         f"{API}/cases/{created[0]['id']}/notes",
         headers=headers_a,
@@ -341,6 +352,7 @@ def test_public_forbidden_from_staff_endpoints(client, actors):
 def test_staff_permissions_unchanged_for_helpdesk(client, actors):
     me = client.get(f"{API}/auth/me", headers=actors.helpdesk.headers).json()
     assert me["role"] == "HELP_DESK_OPERATOR"
+    assert me["role_label"] == "Help Desk"
     assert "case:create" in me["permissions"]
     assert "case:resolve" not in me["permissions"]
     assert "match:review" not in me["permissions"]

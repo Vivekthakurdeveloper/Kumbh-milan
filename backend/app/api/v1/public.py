@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, Response, UploadFile
 
 from app.api.v1.responses import AUTHED, errors
 from app.auth.dependencies import CurrentPrincipal, DbSession
-from app.models.enums import OtpPurpose
+from app.models.enums import CaseType, OtpPurpose
 from app.schemas.common import Page, PageParams
 from app.schemas.public import (
     CaseStatusTokenResponse,
@@ -21,7 +21,6 @@ from app.schemas.public import (
     PublicInformationList,
     PublicInformationRead,
     PublicInformationUpdate,
-    PublicMissingPersonCreate,
     PublicReviewRequest,
     PublicSightingAck,
     PublicSightingCreate,
@@ -48,6 +47,41 @@ ScannerDep = Annotated[MalwareScanner, Depends(get_scanner)]
 VerifiedMobileToken = Annotated[str | None, Header(alias="X-Verified-Mobile-Token")]
 IdempotencyKey = Annotated[str | None, Header(alias="Idempotency-Key")]
 AuthorizationHeader = Annotated[str | None, Header(alias="Authorization")]
+
+
+def _submit_public_case(
+    db: DbSession,
+    storage: ObjectStorage,
+    scanner: MalwareScanner,
+    response: Response,
+    *,
+    case_type: CaseType,
+    report: str,
+    photo: UploadFile | None,
+    verified_mobile_token: str | None,
+    idempotency_key: str | None,
+):
+    if not verified_mobile_token:
+        from app.common.errors import Unauthenticated
+
+        raise Unauthenticated("X-Verified-Mobile-Token is required")
+    payload = public_case_service.parse_public_report(report, case_type=case_type)
+    ack, replayed = public_case_service.submit_public_case(
+        db,
+        storage,
+        scanner,
+        case_type=case_type,
+        payload=payload,
+        verified_mobile_token=verified_mobile_token,
+        idempotency_key=idempotency_key,
+        photo=photo.file if photo else None,
+        photo_filename=photo.filename if photo else None,
+        photo_content_type=photo.content_type if photo else None,
+    )
+    if replayed:
+        response.headers["Idempotent-Replayed"] = "true"
+        response.status_code = status.HTTP_200_OK
+    return ack
 
 
 @router.post("/otp/request", response_model=OtpRequestResponse, responses=errors(422, 429))
@@ -119,26 +153,104 @@ def submit_missing_person(
     verified_mobile_token: VerifiedMobileToken = None,
     idempotency_key: IdempotencyKey = None,
 ):
-    if not verified_mobile_token:
-        from app.common.errors import Unauthenticated
-
-        raise Unauthenticated("X-Verified-Mobile-Token is required")
-    payload = public_case_service.parse_public_report(report)
-    ack, replayed = public_case_service.submit_missing_person(
+    return _submit_public_case(
         db,
         storage,
         scanner,
-        payload=payload,
+        response,
+        case_type=CaseType.MISSING_PERSON,
+        report=report,
+        photo=photo,
         verified_mobile_token=verified_mobile_token,
         idempotency_key=idempotency_key,
-        photo=photo.file if photo else None,
-        photo_filename=photo.filename if photo else None,
-        photo_content_type=photo.content_type if photo else None,
     )
-    if replayed:
-        response.headers["Idempotent-Replayed"] = "true"
-        response.status_code = status.HTTP_200_OK
-    return ack
+
+
+@router.post(
+    "/found-persons",
+    response_model=PublicSubmissionAck,
+    status_code=status.HTTP_201_CREATED,
+    responses=errors(401, 409, 413, 415, 422, 429, 503),
+)
+def submit_found_person(
+    db: DbSession,
+    storage: StorageDep,
+    scanner: ScannerDep,
+    response: Response,
+    report: Annotated[str, Form(description="JSON body matching PublicFoundPersonCreate")],
+    photo: Annotated[UploadFile | None, File()] = None,
+    verified_mobile_token: VerifiedMobileToken = None,
+    idempotency_key: IdempotencyKey = None,
+):
+    return _submit_public_case(
+        db,
+        storage,
+        scanner,
+        response,
+        case_type=CaseType.FOUND_PERSON,
+        report=report,
+        photo=photo,
+        verified_mobile_token=verified_mobile_token,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post(
+    "/lost-items",
+    response_model=PublicSubmissionAck,
+    status_code=status.HTTP_201_CREATED,
+    responses=errors(401, 409, 413, 415, 422, 429, 503),
+)
+def submit_lost_item(
+    db: DbSession,
+    storage: StorageDep,
+    scanner: ScannerDep,
+    response: Response,
+    report: Annotated[str, Form(description="JSON body matching PublicLostItemCreate")],
+    photo: Annotated[UploadFile | None, File()] = None,
+    verified_mobile_token: VerifiedMobileToken = None,
+    idempotency_key: IdempotencyKey = None,
+):
+    return _submit_public_case(
+        db,
+        storage,
+        scanner,
+        response,
+        case_type=CaseType.LOST_ITEM,
+        report=report,
+        photo=photo,
+        verified_mobile_token=verified_mobile_token,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post(
+    "/found-items",
+    response_model=PublicSubmissionAck,
+    status_code=status.HTTP_201_CREATED,
+    responses=errors(401, 409, 413, 415, 422, 429, 503),
+)
+def submit_found_item(
+    db: DbSession,
+    storage: StorageDep,
+    scanner: ScannerDep,
+    response: Response,
+    report: Annotated[str, Form(description="JSON body matching PublicFoundItemCreate")],
+    photo: Annotated[UploadFile | None, File()] = None,
+    verified_mobile_token: VerifiedMobileToken = None,
+    idempotency_key: IdempotencyKey = None,
+):
+    return _submit_public_case(
+        db,
+        storage,
+        scanner,
+        response,
+        case_type=CaseType.FOUND_ITEM,
+        report=report,
+        photo=photo,
+        verified_mobile_token=verified_mobile_token,
+        idempotency_key=idempotency_key,
+    )
 
 
 @router.post(

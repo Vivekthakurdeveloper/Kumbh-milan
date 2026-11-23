@@ -276,7 +276,7 @@ export interface TokenResponse { access_token: string; refresh_token: string; to
 
 export interface UserRead {
   id: UUID; full_name: string; username: string; email: string | null; phone_number: string | null;
-  role: Role; police_badge_number: string | null; station_id: UUID | null; is_active: boolean;
+  role: Role; role_label: string; police_badge_number: string | null; station_id: UUID | null; is_active: boolean;
   last_login_at: ISODateTime | null; created_at: ISODateTime; updated_at: ISODateTime;
 }
 export interface MeResponse extends UserRead { permissions: string[] }
@@ -369,7 +369,15 @@ export interface MatchQueueItem extends Omit<MatchRead, "counterpart"> {
 }
 
 export interface UserDirectoryEntry {
-  id: UUID; full_name: string; role: Role; station_id: UUID | null;
+  id: UUID; full_name: string; role: Role; role_label: string; station_id: UUID | null;
+}
+
+export interface FieldChangeHistory {
+  case_id: UUID; field_name: string; previous_value: unknown; updated_value: unknown;
+  updated_by_user_id: UUID; user_role: Role; timestamp: ISODateTime; action_type: "CASE_UPDATED";
+}
+export interface CaseHistory {
+  status_history: unknown[]; assignments: unknown[]; field_changes: FieldChangeHistory[];
 }
 
 export interface AttachmentRead {
@@ -626,9 +634,9 @@ Backend CORS is configured by `CORS_ORIGINS` (JSON list, e.g. `["http://localhos
 | `allow_origins` | `CORS_ORIGINS` | Add every frontend origin explicitly. |
 | `allow_credentials` | `false` | Use bearer headers, not cookies. |
 | `allow_methods` | `GET, POST, PATCH, DELETE` | |
-| `allow_headers` | `Authorization, Content-Type, Idempotency-Key, X-Request-ID` | `X-Step-Up-Code` is missing, so cross-origin step-up fails (gap G-17). |
-| `expose_headers` | `X-Request-ID, Idempotent-Replayed, Retry-After` | `X-Export-Rows`, `X-Export-Truncated`, and `Content-Disposition` are **not** readable cross-origin (gap G-16). |
+| `allow_headers` | `Authorization, Content-Type, Idempotency-Key, X-Request-ID, X-Step-Up-Code, X-Verified-Mobile-Token` | Supports bearer auth, idempotency, TOTP step-up, and verified public intake. |
+| `expose_headers` | `Content-Disposition, Idempotent-Replayed, Retry-After, X-Export-Rows, X-Export-Truncated, X-Request-ID` | Browser clients can read export filenames, row counts, truncation state, retry timing, replay state, and request ids. |
 
-Same-origin deployment removes both limitations.
+Same-origin deployment remains recommended because it reduces browser policy and deployment complexity.
 
 Request body limit: 30 MB (`MAX_REQUEST_BYTES`). The API sends `Cache-Control: no-store` on every `/api/` response, so HTTP caching does not apply; rely on the client cache (TanStack Query etc.).

@@ -14,8 +14,12 @@ Backend-only support for Android and iOS staff apps that register cases offline 
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/v1/sync/push` | Submit offline creates, updates, and notes |
-| GET | `/api/v1/sync/pull` | Download cases changed after a cursor |
+| GET | `/api/v1/sync/pull` | Download changed cases plus archived/scope-revocation tombstones |
 | GET | `/api/v1/sync/status` | Last successful sync times and server cursor |
+| POST | `/api/v1/sync/attachments/sessions` | Create or resume an attachment upload manifest |
+| PUT | `/api/v1/sync/attachments/sessions/{id}/content` | Append bytes at the current server offset |
+| POST | `/api/v1/sync/attachments/sessions/{id}/finalize` | Verify checksum and enter quarantine/scanning |
+| DELETE | `/api/v1/sync/attachments/sessions/{id}` | Abort an incomplete upload |
 
 Assigned cases continue to use `GET /api/v1/cases?assigned_to_user_id=<me>` (user id from `/api/v1/auth/me`). Search, notes, and attachments keep their existing routes.
 
@@ -129,6 +133,15 @@ Authorization: Bearer …
   ],
   "next_cursor": "eyJ0Ijoi…",
   "has_more": true,
+  "tombstones": [
+    {
+      "case_id": "559a68ce-bb0f-4f19-b929-4eba1ccb2b08",
+      "reason": "SCOPE_REVOKED",
+      "server_updated_at": "2026-11-05T10:09:30+00:00"
+    }
+  ],
+  "next_tombstone_cursor": "eyJ0Ijoi…",
+  "has_more_tombstones": false,
   "server_time": "2026-11-05T10:10:00+00:00"
 }
 ```
@@ -138,6 +151,14 @@ Authorization: Bearer …
 - When `server_updated_at` changes, refresh notes and attachments with the existing case endpoints.
 - `SYNC_PULL_LAG_SECONDS` (default 5) withholds very recent writes so a late-committing transaction is never skipped. Tests set it to 0.
 
+### Tombstones
+
+- The server records only cases previously returned to that user. Users never receive tombstones for cases they did not possess.
+- `ARCHIVED` and `SCOPE_REVOKED` contain only `case_id`, reason, and timestamp—no new station, assignee, case fields, or PII.
+- Case and tombstone streams have independent keyset cursors. Process tombstones first, then apply returned case items; persist both cursors.
+- Repeating the same cursor returns the same tombstones. Deleting a local case by id is therefore idempotent.
+- Scope is reconciled at pull time, covering station/role/assignment/match changes without relying on a client to fetch a now-forbidden case.
+
 ## Status
 
 ```http
@@ -146,10 +167,9 @@ GET /api/v1/sync/status?device_id=android-pixel-7-a1b2&pending_count=2&failed_co
 
 `pending_count` and `failed_count` are stored as reported by the client. The server never invents them. `server_cursor` is the current tip of the caller's permitted cases.
 
-## Photographs
+## Offline attachments
 
-1. Push the offline case first and read `case_id` from the push result.
-2. Upload with the existing endpoint:
+Push the offline case first and read `case_id` from the result. Small online uploads may still use the original one-shot endpoint:
 
 ```http
 POST /api/v1/cases/{case_id}/attachments
@@ -164,8 +184,19 @@ client_created_at=2026-11-05T10:02:00+00:00
 file=@child.jpg
 ```
 
-3. Retries with the same `client_record_id` (or `Idempotency-Key`) return the same attachment; they do not create duplicates.
-4. Download remains the audited short-lived presigned URL from `GET /cases/{id}/attachments/{attachment_id}`. Private S3 storage and malware scanning are unchanged.
+Retries with the same `client_record_id` (or `Idempotency-Key`) return the same attachment.
+
+For interrupted/offline uploads:
+
+1. `POST /sync/attachments/sessions` with case/device/client ids, media type, expected byte size, SHA-256 checksum, filename, and declared content type.
+2. The same manifest returns the existing session (`Idempotent-Replayed: true`).
+3. `PUT /sync/attachments/sessions/{id}/content?offset=<bytes_received>` with a multipart `file` chunk. The offset must exactly match the server response.
+4. Repeat until status is `READY`.
+5. `POST /sync/attachments/sessions/{id}/finalize`.
+
+Finalize rechecks size and checksum, then uses the normal signature validation, quarantine, malware scan, private storage, audit, and `client_record_id` dedupe path. A checksum mismatch moves the session to `FAILED` without creating an attachment. Finalize retries return the same attachment. Open/failed sessions are listed by `/sync/status`; expired incomplete sessions are purged by the maintenance worker.
+
+Downloads remain audited short-lived URLs from `GET /cases/{id}/attachments/{attachment_id}`. Binary data is intentionally never embedded in `/sync/push`.
 
 ## Settings
 
@@ -173,26 +204,30 @@ file=@child.jpg
 |---|---|---|
 | `SYNC_MAX_BATCH` | 50 | Max records per push (also caps pull page size) |
 | `SYNC_PULL_LAG_SECONDS` | 5 | Pull lag window |
+| `SYNC_ATTACHMENT_SESSION_TTL_HOURS` | 72 | Expiry for incomplete staged uploads |
+| `SYNC_ATTACHMENT_MAX_OPEN_SESSIONS_PER_DEVICE` | 20 | Per-user/device exhaustion limit |
 
 ## Audit
 
 - `SYNC_PUSH` — one event per batch (counts and per-record outcomes)
-- `SYNC_PULL` — cursor, returned count, `has_more`
+- `SYNC_PULL` — case/tombstone cursors, returned counts, and pagination state
 - `SYNC_CONFLICT` — each conflicting update
+- `SYNC_TOMBSTONE_EMITTED` — an archived or scope-revoked case previously delivered to the user
+- `SYNC_ATTACHMENT_SESSION_CREATED`, `SYNC_ATTACHMENT_SESSION_FINALIZED`, `SYNC_ATTACHMENT_SESSION_ABORTED`
 - Domain events (`CASE_CREATED`, `CASE_UPDATED`, `NOTE_ADDED`, `ATTACHMENT_UPLOADED`) continue to be written by existing services
 
 ## Migration
 
 ```bash
 cd backend
-alembic upgrade head   # applies 0009 on an existing database; additive only
+alembic upgrade head
 ```
 
-Revision `0009` adds nullable sync columns, `sync_changed_at`, triggers, unique indexes, and `sync_devices`. Existing rows are preserved. Downgrade drops the additive objects.
+Revision `0009` adds nullable sync columns, `sync_changed_at`, triggers, unique indexes, and `sync_devices`. Revision `0015` adds the delivered-case ledger and append-only tombstones. Revision `0016` adds resumable attachment sessions. All are additive for existing case/mobile clients.
 
 ## Remaining gaps (honest)
 
-- Pull does not emit deletion or scope-revocation tombstones.
 - `Idempotency-Key` for non-sync REST clients still expires after `IDEMPOTENCY_TTL_HOURS` (default 24). Durable offline identity is `client_record_id`.
 - Notes and attachment bodies are not embedded in pull responses; clients fetch them with existing endpoints.
-- Binary photographs are not sent inside `/sync/push`.
+- Case and tombstone streams use two cursors; upgraded clients must persist and drain both.
+- Attachment chunks currently rewrite the bounded staging object rather than using provider-specific S3 multipart upload. This keeps the contract portable and is acceptable under the configured 10 MB photo / 25 MB audio limits.

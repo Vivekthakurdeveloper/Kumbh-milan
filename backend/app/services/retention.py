@@ -18,7 +18,18 @@ from app.auth.permissions import Permission, require_permission
 from app.common.errors import Conflict, NotFound
 from app.common.time import utcnow
 from app.config import get_settings
-from app.models import Case, CaseAttachment, CaseContact, CaseMatch, CaseNote, CaseStatusHistory, LegalHold, RetentionRun, User
+from app.models import (
+    Case,
+    CaseAttachment,
+    CaseContact,
+    CaseHandover,
+    CaseMatch,
+    CaseNote,
+    CaseStatusHistory,
+    LegalHold,
+    RetentionRun,
+    User,
+)
 from app.models.enums import CaseStatus, CaseType, RetentionPolicy, RetentionRunStatus, ScanStatus
 from app.models.retention import REDACTION_PREFIX
 from app.observability.metrics import RETENTION_ACTIONS
@@ -366,9 +377,30 @@ def _anonymise(db: Session, storage: ObjectStorage, run: RetentionRun, case: Cas
             revocation_reason=_redact(CaseMatch.revocation_reason, marker),
         )
     )
+    handovers = db.execute(
+        update(CaseHandover)
+        .where(
+            or_(
+                CaseHandover.primary_case_id == case.id,
+                CaseHandover.counterpart_case_id == case.id,
+            )
+        )
+        .values(
+            claimant_ciphertext=None,
+            identity_document_type=None,
+            witness_ciphertext=None,
+            evidence_attachment_ids=[],
+            verification_ciphertext=None,
+            handover_location=None,
+            acknowledgement_ciphertext=None,
+            rejection_ciphertext=None,
+            anonymized_at=utcnow(),
+        )
+    ).rowcount
     record_audit(db, action=AuditAction.CASE_ANONYMIZED, entity_type="case", entity_id=case.id, actor_user_id=None,
                  case=case, after={"retention_run_id": run.id, "attachments_purged": len(attachments),
-                                   "notes_redacted": notes, "contact_removed": contact is not None})
+                                   "notes_redacted": notes, "handovers_redacted": handovers,
+                                   "contact_removed": contact is not None})
 
 
 def _redact(column, marker: str):

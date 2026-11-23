@@ -5,7 +5,16 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from app.database import SessionLocal, engine
-from app.models import AuditEvent, Case, CaseAttachment, CaseContact, CaseNote, CaseStatusHistory, MissingPersonDetails, Notification
+from app.models import (
+    AuditEvent,
+    Case,
+    CaseAttachment,
+    CaseContact,
+    CaseNote,
+    CaseStatusHistory,
+    MissingPersonDetails,
+    Notification,
+)
 from app.models.enums import Role
 from tests.helpers import API, MISSING_PERSON, Actor, create_case, create_user, login
 

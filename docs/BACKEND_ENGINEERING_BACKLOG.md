@@ -1,6 +1,6 @@
 # Backend engineering backlog
 
-Baseline: `main` at `662c4df` on 20 November 2026.
+Baseline: `main` at `a60e8c3` on 23 November 2026.
 
 This backlog covers only backend work. Web, Android, and iOS screens are client-team deliverables. Their shared authentication, case, media, public, and synchronization APIs already exist.
 
@@ -31,7 +31,7 @@ This backlog covers only backend work. Web, Android, and iOS screens are client-
 ### BE-001 — Fix browser CORS contracts
 
 **Priority:** P0  
-**Status:** READY  
+**Status:** IMPLEMENTED AND TESTED
 **Size:** S
 
 **Outcome**
@@ -46,19 +46,21 @@ Cross-origin clients can read export metadata and send a TOTP step-up code.
 
 **Acceptance criteria**
 
-- [ ] A permitted browser origin can read all three export headers.
-- [ ] TOTP-protected password reset and retention execution pass preflight.
-- [ ] An unapproved origin remains blocked.
-- [ ] Middleware and CORS tests cover both positive and negative cases.
+- [x] A permitted browser origin can read all three export headers.
+- [x] TOTP-protected password reset and retention execution pass preflight.
+- [x] An unapproved origin remains blocked.
+- [x] Middleware and CORS tests cover both positive and negative cases.
+
+Verification: `tests/test_cors_contract.py` passes without a database.
 
 ---
 
 ### BE-002 — Add structured reunification and handover records
 
 **Priority:** P1  
-**Status:** DECISION REQUIRED  
+**Status:** IMPLEMENTED AND TESTED; CLIENT/POLICY ROLLOUT PENDING
 **Size:** L  
-**Depends on:** Approved claimant fields, document-retention rules, and safeguarding policy
+**Depends on:** Production claimant/document-retention policy and safeguarding sign-off before enabling the resolution gate
 
 **Outcome**
 
@@ -66,12 +68,12 @@ Person reunification and item return are represented by structured, auditable re
 
 **Scope**
 
-- Add an immutable handover/reunification model linked to the case, confirmed match when present, receiving claimant, recording officer, and witness.
+- Add an encrypted handover/reunification model linked to both cases and the confirmed match, with append-only lifecycle audit history.
 - Store approved claimant fields such as name, relationship, document type/reference, handover time, and verification method.
 - Encrypt sensitive claimant fields and never return them in list/search responses.
 - Add scoped create and read endpoints under `/api/v1/cases/{case_id}/handovers`.
 - Require an appropriate handover before resolving person cases or completing an item return, according to the approved policy.
-- Audit create and reveal actions with redacted metadata.
+- Audit create, verify/reject, and completion actions with redacted metadata.
 
 **Acceptance criteria**
 
@@ -82,12 +84,14 @@ Person reunification and item return are represented by structured, auditable re
 - [ ] Concurrent retries create only one record.
 - [ ] Retention and legal-hold processing includes the new records.
 
+Implementation note: revision `0014` adds encrypted structured handovers, police/admin permissions, create/list/detail/verify/reject/complete/history APIs, duplicate and custody gates, retention anonymization, and the rollout flag `HANDOVER_REQUIRED_FOR_RESOLVE`. The full isolated suite passes.
+
 ---
 
 ### BE-003 — Expose a complete custody history
 
 **Priority:** P1  
-**Status:** READY  
+**Status:** IMPLEMENTED AND TESTED
 **Size:** M
 
 **Outcome**
@@ -96,7 +100,7 @@ Authorized case handlers can see every found-item custody transfer and release.
 
 **Scope**
 
-- Persist immutable custody events with actor, timestamp, previous/new state, storage location, reason, and handover link.
+- Persist immutable custody events with actor, timestamp, previous/new state, storage location, reason, and a handover-evidence marker. Link the structured handover after BE-002 exists.
 - Include custody events in `GET /api/v1/cases/{case_id}/history` or expose a dedicated endpoint.
 - Keep claimant details redacted unless the caller has contact-reveal permission.
 - Define migration behavior for existing found-item cases; do not invent historical events.
@@ -108,6 +112,8 @@ Authorized case handlers can see every found-item custody transfer and release.
 - [ ] Help-desk visibility follows the approved custody policy.
 - [ ] Events cannot be updated, deleted, or truncated by the application role.
 - [ ] History remains intact after a case is closed.
+
+Implementation note: new custody changes enrich the existing append-only audit event and `CaseHistory.custody_history` projects it for scoped staff callers. Existing events are not backfilled with invented location data. The full isolated suite passes.
 
 ---
 
@@ -182,9 +188,9 @@ Citizens can submit and track grievances, while authorized staff can assign, inv
 ### BE-101 — Complete account-free citizen intake
 
 **Priority:** P2  
-**Status:** DECISION REQUIRED  
+**Status:** IMPLEMENTED AND TESTED
 **Size:** M  
-**Depends on:** Approved public intake matrix
+**Depends on:** Approved public intake matrix — all four case types are approved by the current product plan
 
 **Outcome**
 
@@ -192,12 +198,11 @@ The OTP portal supports every case type approved for anonymous/account-free subm
 
 **Current boundary**
 
-Account-free APIs support missing-person reports and sightings. Authenticated PUBLIC accounts can create all four case types.
+Account-free APIs support missing-person, found-person, lost-item, and found-item reports plus sightings. Authenticated PUBLIC accounts can also create all four case types.
 
 **Scope**
 
-- Decide whether account-free found-person, lost-item, and found-item reports are permitted.
-- Implement only the approved forms using verified-mobile tokens.
+- Implement the approved found-person, lost-item, and found-item forms using the existing verified-mobile report token.
 - Route submissions to the configured intake station with `PENDING_VERIFICATION`.
 - Reuse idempotency, media validation, privacy controls, and staff review.
 
@@ -206,12 +211,14 @@ Account-free APIs support missing-person reports and sightings. Authenticated PU
 - [ ] Each approved type has a tested submit, replay, review, and rejection flow.
 - [ ] Public responses never expose internal notes, contacts, matches, or staff identities.
 
+Implementation note: all four multipart case-report routes share OTP/mobile verification, required idempotency, intake-station routing, notification enqueueing, optional private photo upload, and staff review. The full isolated suite passes.
+
 ---
 
 ### BE-102 — Add mobile sync tombstones and scope revocation
 
 **Priority:** P2  
-**Status:** READY  
+**Status:** IMPLEMENTED AND TESTED
 **Size:** M
 
 **Outcome**
@@ -226,16 +233,18 @@ Offline clients learn when a previously visible case is archived, deleted from t
 
 **Acceptance criteria**
 
-- [ ] A device receives a tombstone exactly once per cursor progression.
-- [ ] Retrying an old cursor returns the same deterministic result.
-- [ ] A scope change removes local access without revealing the case's new owner or station.
+- [x] A device receives a tombstone exactly once per cursor progression.
+- [x] Retrying an old cursor returns the same deterministic result.
+- [x] A scope change removes local access without revealing the case's new owner or station.
+
+Implementation note: revision `0015` adds a per-user delivered-case ledger and append-only `ARCHIVED` / `SCOPE_REVOKED` stream with independent keyset cursor and pull-time scope reconciliation.
 
 ---
 
 ### BE-103 — Add durable offline attachment synchronization
 
 **Priority:** P2  
-**Status:** READY  
+**Status:** IMPLEMENTED AND TESTED
 **Size:** L
 
 **Outcome**
@@ -251,10 +260,12 @@ Mobile clients can safely resume media upload after reconnecting without embeddi
 
 **Acceptance criteria**
 
-- [ ] An interrupted upload resumes without creating a duplicate attachment.
-- [ ] Finalization fails when the checksum or size differs.
-- [ ] Unscanned media never receives a downloadable URL.
-- [ ] Expired incomplete sessions are safely purged.
+- [x] An interrupted upload resumes without creating a duplicate attachment.
+- [x] Finalization fails when the checksum or size differs.
+- [x] Unscanned media never receives a downloadable URL.
+- [x] Expired incomplete sessions are safely purged.
+
+Implementation note: revision `0016` adds bounded upload manifests, exact-offset chunk append, SHA-256/size finalization, existing quarantine/scan reuse, durable replay, status visibility, abort, and maintenance expiry cleanup.
 
 ---
 

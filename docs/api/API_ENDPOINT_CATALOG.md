@@ -101,7 +101,7 @@ The same seven operations are generated for each case type from `backend/app/ser
 | POST | `/api/v1/cases/{type}` | Registration form; found-persons verified for Help desk, Police, and Admin (existing PUBLIC ownership flow retained) | All roles | 201 `{Type}CaseRead` (header `Idempotent-Replayed: true` on replay) | 403 `station_scope`; 409 `idempotency_key_reused`; 422 `station_required`, `invalid_station`, `invalid_location`, `coordinates_out_of_area`, `invalid_idempotency_key` | Allocates case number; status `OPEN`; status-history row; audit `CASE_CREATED`; encrypted contact; **automatic match suggestions** (best effort) | Implemented — tested |
 | GET | `/api/v1/cases/{type}` | Type-specific case list | All roles | 200 `Page[{Type}CaseRead]` (full records) | 401; 422 | — | Implemented — tested |
 | GET | `/api/v1/cases/{type}/{case_id}` | Case details | All roles (scoped) | 200 `{Type}CaseRead` | 404 `case_not_found` (also for a case of another type) | — | Implemented — tested |
-| PATCH | `/api/v1/cases/{type}/{case_id}` | Edit case | All roles (scoped) | 200 `{Type}CaseRead` | 404; 409 `case_changed`, `case_closed`; 422 `required_field`, `coordinate_source_required` | Audit `CASE_UPDATED` / `CONTACT_UPDATED`; re-runs matching when details or position change | Implemented — tested |
+| PATCH | `/api/v1/cases/{type}/{case_id}` | Edit case | Staff roles (scoped) | 200 `{Type}CaseRead` | 404; 409 `case_changed`, `case_closed`; 422 `validation_error`, `required_field`, `coordinate_source_required` | Append-only field deltas in `CASE_UPDATED`; `CONTACT_UPDATED`; re-runs matching when details or position change | Implemented — tested |
 | POST | `/api/v1/cases/{type}/{case_id}/assign` | Assign / reassign dialog | Police, Admin | 200 `{Type}CaseRead` | 403 `permission_denied`, `station_scope`; 404; 409 `case_changed`, `case_inactive`, `already_assigned`; 422 `invalid_assignee` | Closes previous assignment row; audit `CASE_ASSIGNED`; auto-transition to `ASSIGNED` from `OPEN`/`UNDER_REVIEW`/`REOPENED` | Implemented — tested |
 | POST | `/api/v1/cases/{type}/{case_id}/status` | Status actions (review, close, resolve, reopen) | Depends on target (see section 12) | 200 `{Type}CaseRead` | 403; 404; 409 `invalid_status_transition`, `case_changed`, `assignee_required`, `custody_not_released`, `case_anonymized`; 422 `match_required`, `invalid_match`, `match_not_confirmed`, `verification_required`, `safeguarding_evidence_required` | Status-history row; audit `CASE_STATUS_CHANGED` / `CASE_CLOSED` / `CASE_REOPENED` | Implemented — tested |
 | POST | `/api/v1/cases/found-items/{case_id}/custody` | **Found items only.** Custody panel | Police, Admin | 200 `FoundItemCaseRead` | 403; 404; 409 `case_closed`, `invalid_custody_transition`; 422 `storage_location_required`, `handover_required` | Updates `custody_status`, `storage_location`, `handover_acknowledgement`, `released_at`; audit `CUSTODY_CHANGED` | Implemented — tested |
@@ -125,7 +125,13 @@ These work for any case type.
 | POST | `/api/v1/cases/{case_id}/attachments` | Upload photo/voice (multipart) | All roles | 201 `AttachmentRead` (scanned) or **202** (scan pending) | 409 `case_closed`; 413; 415 `unsupported_media_type`, `media_type_mismatch`, `content_type_mismatch`; 422 `empty_file`, `malware_detected`; 503 `storage_unavailable` | Object stored in private bucket; audit `ATTACHMENT_UPLOADED`; malware scan | Implemented — tested | `upload_attachment` |
 | GET | `/api/v1/cases/{case_id}/attachments/{attachment_id}` | View/download (short-lived URL) | All roles | 200 `AttachmentDownload` | 404 `attachment_not_found`; 409 `attachment_not_available`; 503 | Audit `ATTACHMENT_ACCESSED` | Implemented — tested | `download_attachment` |
 | DELETE | `/api/v1/cases/{case_id}/attachments/{attachment_id}` | Withdraw attachment (**JSON body required**) | Police, Admin | 204 | 403; 404; 422 | Soft delete; audit `ATTACHMENT_DELETED` | Implemented — tested | `delete_attachment` |
-| GET | `/api/v1/cases/{case_id}/history` | History tab (status + assignments) | All roles | 200 `CaseHistory` | 404 | — | Implemented — tested | `history` |
+| GET | `/api/v1/cases/{case_id}/history` | History tab (status + assignments + field changes + custody) | All roles | 200 `CaseHistory`; PUBLIC assignment/field/custody lists empty; protected values role-redacted | 404 | — | Implemented — tested | `history` |
+| POST | `/api/v1/cases/{case_id}/handovers` | Record claimant/witness and open a structured handover | Police, Admin | 201/200 `HandoverRead` | 403; 404; 409 `case_inactive`, `handover_session_open`, `handover_already_completed`; 422 `match_required`, `invalid_match`, `match_not_confirmed` | Encrypted claimant/witness values; audit `HANDOVER_CREATED` | Implemented; DB regression pending | `create_handover` |
+| GET | `/api/v1/cases/{case_id}/handovers` | List handovers linked to either matched case | Police, Admin | 200 `HandoverRead[]` | 403; 404 | Sensitive values decrypted only for authorized staff | Implemented; DB regression pending | `list_handovers` |
+| GET | `/api/v1/cases/{case_id}/handovers/{handover_id}` | Structured handover detail | Police, Admin | 200 `HandoverRead` | 403; 404 `handover_not_found` | — | Implemented; DB regression pending | `get_handover` |
+| POST | `/api/v1/cases/{case_id}/handovers/{handover_id}/verify` | Verify or reject claimant | Police, Admin | 200 `HandoverRead` | 403; 404; 409 `handover_state`, `handover_changed`; 422 `identity_document_required` | Audit `HANDOVER_VERIFIED` or `HANDOVER_REJECTED` | Implemented; DB regression pending | `verify_handover` |
+| POST | `/api/v1/cases/{case_id}/handovers/{handover_id}/complete` | Complete physical handover | Police, Admin | 200 `HandoverRead` | 403; 404; 409 `handover_state`, `custody_not_released` | Encrypted acknowledgement; audit `HANDOVER_COMPLETED` | Implemented; DB regression pending | `complete_handover` |
+| GET | `/api/v1/cases/{case_id}/handovers/{handover_id}/history` | Append-only handover lifecycle history | Police, Admin | 200 `HandoverHistoryEventRead[]` | 403; 404 | Projects redacted audit events | Implemented; DB regression pending | `handover_history` |
 | GET | `/api/v1/cases/{case_id}/matches` | Matching candidates for a case | All roles | 200 `MatchRead[]` (not paginated; highest score first) | 404 | — | Implemented — tested | `list_matches` |
 | POST | `/api/v1/cases/{case_id}/matches` | Propose a manual match | All roles | 201 `MatchRead` | 404 `case_not_found`; 409 `case_closed`, `duplicate_match`; 422 `incompatible_case_types` | Audit `MATCH_PROPOSED` (both sides); grants cross-station visibility | Implemented — tested | `propose_match` |
 | POST | `/api/v1/cases/{case_id}/matches/generate` | "Find matches now" | All roles | 200 `MatchGenerateResult` | 409 `case_not_matchable` | New `AUTOMATIC` `PROPOSED` matches; audit `MATCH_SUGGESTED` | Implemented — tested | `generate_matches` |
@@ -134,7 +140,7 @@ These work for any case type.
 | POST | `/api/v1/cases/{case_id}/notifications` | Queue SMS/WhatsApp to family/owner | All roles | **202** `NotificationRead` | 409 `case_closed`; 422 `invalid_phone`, `unsupported_locale` | Outbox row; audit `NOTIFICATION_QUEUED` | **Blocked** for delivery (no provider; stays `PENDING`) | `queue_notification` |
 | GET | `/api/v1/cases/{case_id}/notifications` | Messages sent for a case | All roles | 200 `NotificationRead[]` | 404 | — | Implemented — tested | `list_notifications` |
 
-That is **19 operations**.
+That is **25 operations**.
 
 ## 8. Match review queue (`/api/v1/matches`)
 
@@ -204,6 +210,9 @@ Unauthenticated except where noted. OTP and submit routes are IP rate-limited (`
 | POST | `/api/v1/public/status/verify-otp` | Case-scoped status JWT | None | 200 `CaseStatusTokenResponse` | 401; 422; 429 | Implemented — tested | `v1/public.py:status_verify_otp` |
 | GET | `/api/v1/public/cases/{case_id}/status` | Privacy-safe public status | Bearer status JWT | 200 `PublicCaseStatusRead` | 401; 404 | Implemented — tested | `v1/public.py:case_status` |
 | POST | `/api/v1/public/missing-persons` | Citizen missing-person report | `X-Verified-Mobile-Token` + `Idempotency-Key` | 201/200 `PublicSubmissionAck` | 401; 409; 413; 415; 422; 429; 503 | Implemented — tested | `v1/public.py:submit_missing_person` |
+| POST | `/api/v1/public/found-persons` | Citizen found-person report | `X-Verified-Mobile-Token` + `Idempotency-Key` | 201/200 `PublicSubmissionAck` | 401; 409; 413; 415; 422; 429; 503 | Implemented — tested | `v1/public.py:submit_found_person` |
+| POST | `/api/v1/public/lost-items` | Citizen lost-item report | `X-Verified-Mobile-Token` + `Idempotency-Key` | 201/200 `PublicSubmissionAck` | 401; 409; 413; 415; 422; 429; 503 | Implemented — tested | `v1/public.py:submit_lost_item` |
+| POST | `/api/v1/public/found-items` | Citizen found-item report | `X-Verified-Mobile-Token` + `Idempotency-Key` | 201/200 `PublicSubmissionAck` | 401; 409; 413; 415; 422; 429; 503 | Implemented — tested | `v1/public.py:submit_found_item` |
 | POST | `/api/v1/public/sightings` | Citizen sighting (+ optional photo) | `X-Verified-Mobile-Token` | 201 `PublicSightingAck` | 401; 413; 415; 422; 429; 503 | Implemented — tested | `v1/public.py:submit_sighting` |
 | GET | `/api/v1/public/information` | Published bilingual public info | None | 200 `PublicInformationList` | — | Implemented — tested | `v1/public.py:public_information` |
 
@@ -218,6 +227,20 @@ Staff extensions:
 | GET/POST/PATCH | `/api/v1/admin/public-information…` | Admin list/create/update/publish/unpublish | `public_information:manage` | 200/201 | Implemented — tested | `v1/public.py:admin_*` |
 | POST/DELETE | `/api/v1/devices/push-token` | Register/deactivate FCM token | Staff JWT or citizen status JWT | 204 | Implemented — tested | `v1/devices.py` |
 
+## 11c. Mobile offline synchronization (`/api/v1/sync`)
+
+All routes require staff Bearer authentication and apply normal case scope.
+
+| Method | Path | Purpose | Success | Main errors | Status |
+|---|---|---|---|---|---|
+| POST | `/api/v1/sync/push` | Batch offline case create/update and notes | 200 `SyncPushResponse` with per-record outcomes | 422 | Implemented — tested |
+| GET | `/api/v1/sync/pull` | Incremental cases plus archived/scope-revocation tombstones | 200 `SyncPullResponse`; independent case/tombstone cursors | 422 `invalid_cursor` | Implemented — tested |
+| GET | `/api/v1/sync/status` | Device sync times, cursor, backlog, and open attachment sessions | 200 `SyncStatusResponse` | 422 | Implemented — tested |
+| POST | `/api/v1/sync/attachments/sessions` | Create/replay an offline attachment manifest | 201/200 `AttachmentUploadSessionRead` | 409; 413; 422 | Implemented — tested |
+| PUT | `/api/v1/sync/attachments/sessions/{id}/content` | Append bytes at exact offset | 200 `AttachmentUploadSessionRead` | 404; 409 `upload_offset_mismatch`; 413; 422; 503 | Implemented — tested |
+| POST | `/api/v1/sync/attachments/sessions/{id}/finalize` | Verify size/checksum and enter quarantine/scanning | 200 `AttachmentUploadFinalizeResponse` | 404; 409; 415; 422 `upload_checksum_mismatch`; 503 | Implemented — tested |
+| DELETE | `/api/v1/sync/attachments/sessions/{id}` | Abort incomplete upload | 200 `AttachmentUploadSessionRead` | 404; 409 | Implemented — tested |
+
 ## 12. Totals
 
 | Module | Operations |
@@ -228,7 +251,7 @@ Staff extensions:
 | Users | 7 |
 | Locations | 6 |
 | Case-type endpoints | 25 |
-| Shared case operations | 20 (+ public-review) |
+| Shared case operations | 26 (including public-review) |
 | Match review queue | 4 |
 | Staff notifications | 2 |
 | Media | 1 |
@@ -236,11 +259,12 @@ Staff extensions:
 | Retention and legal holds | 10 |
 | Dashboard | 1 |
 | Reports | 1 |
-| Public portal | 8 |
+| Mobile sync | 7 |
+| Public portal | 11 |
 | Sightings (staff) | 3 |
 | Public information admin | 5 |
 | Devices | 2 |
-| **Total in OpenAPI** | **92 paths / 114 operations** |
+| **Total in OpenAPI** | **104 paths / 127 operations** |
 | `/metrics` (outside OpenAPI) | 1 |
 
 Phase 4 adds citizen OTP intake, status access, sightings, lifecycle EMAIL/PUSH outbox adapters (MSG91/SMTP/FCM), public information, PUBLIC self-registration, and restricted case access. Phase 6 adds browser-reachable media links and self-service password reset by email/SMS code. Live SMS/email/push delivery remains deployment-dependent. See [PHASE4_PUBLIC_PORTAL.md](../evidence/PHASE4_PUBLIC_PORTAL.md) and [API_GAP_ANALYSIS.md](./API_GAP_ANALYSIS.md).
@@ -267,6 +291,8 @@ Phase 4 adds citizen OTP intake, status access, sightings, lifecycle EMAIL/PUSH 
 | `case:resolve` | | ✓ | ✓ | | Status → `MATCH_FOUND`, `RESOLVED`, `CLOSED`, `REOPENED` |
 | `case:custody_update` | | ✓ | ✓ | | Custody |
 | `case:contact_read` | | ✓ | ✓ | | Contact reveal |
+| `handover:read` | | ✓ | ✓ | | Structured claimant/reunification details and history |
+| `handover:manage` | | ✓ | ✓ | | Create, verify/reject, and complete structured handovers |
 | `note:sensitive` | | ✓ | ✓ | | Create/read sensitive notes; see `verification_evidence`, `review_evidence`, `revocation_reason` |
 | `attachment:delete` | | ✓ | ✓ | | Delete attachment |
 | `match:review` | | ✓ | ✓ | | Confirm/reject/revoke; match photo URLs |

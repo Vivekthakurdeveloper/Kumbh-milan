@@ -27,7 +27,7 @@ Matching suggestions are not proof of identity. No API confirms a match, reunifi
 
 A confirmed human review may also move `OPEN`, `UNDER_REVIEW`, `ASSIGNED`, or `REOPENED` to `MATCH_FOUND`. That path is not the generic transition table.
 
-`RESOLVED` requires a confirmed `match_id` or `verification_evidence`. A found-person case with `safeguarding_review_required` always requires `verification_evidence`. A found item must already be `RELEASED`. Anonymised cases cannot be reopened.
+`RESOLVED` requires a confirmed `match_id` or `verification_evidence`. A found-person case with `safeguarding_review_required` always requires `verification_evidence`. A found item must already be `RELEASED`. When `HANDOVER_REQUIRED_FOR_RESOLVE=true`, person cases additionally require a completed structured handover linked to the case (and the supplied match when present). Anonymised cases cannot be reopened.
 
 `expected_version` returns `409 case_changed` when stale. Create and selected updates accept an idempotency key.
 
@@ -38,6 +38,16 @@ A confirmed human review may also move `OPEN`, `UNDER_REVIEW`, `ASSIGNED`, or `R
 `TRANSFERRED -> IN_CUSTODY | TRANSFERRED | RELEASED`
 
 `RELEASED` has no next state. Transfer requires `storage_location`. Release requires `recipient_acknowledgement`. The acknowledgement is stored on the found-item row and in the audit event.
+
+## Structured handover
+
+Police/admin users record a claimant and optional witness under `/cases/{id}/handovers`. Person reunification requires a confirmed person match; a match-less item return must be opened from the found-item case.
+
+`CLAIMANT_RECORDED -> VERIFIED -> COMPLETED`
+
+`CLAIMANT_RECORDED -> REJECTED`
+
+Verification records an approved method and encrypted evidence. Completion records the physical location/time and encrypted acknowledgement. A found-item handover cannot complete before custody is `RELEASED`. `COMPLETED` and `REJECTED` are terminal; a rejected attempt may be followed by a new handover. Sensitive values are encrypted, lifecycle actions are audited without plaintext PII, and retention clears ciphertext during anonymisation.
 
 ## Matching
 

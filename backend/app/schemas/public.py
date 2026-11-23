@@ -6,6 +6,7 @@ from pydantic import EmailStr, Field
 
 from app.models.enums import (
     AgeGroup,
+    CommunicationStatus,
     Gender,
     OtpPurpose,
     PublicInformationKind,
@@ -18,13 +19,17 @@ from app.schemas.common import LocationText, LongText, PastDatetime, ReadModel, 
 
 class OtpRequest(StrictModel):
     mobile_number: str = Field(min_length=8, max_length=20)
-    purpose: OtpPurpose
+    purpose: OtpPurpose = Field(
+        description="Use REPORT_MISSING for any account-free case report; REPORT_SIGHTING for a sighting"
+    )
     locale: Literal["en", "hi"] = "hi"
 
 
 class OtpVerify(StrictModel):
     mobile_number: str = Field(min_length=8, max_length=20)
-    purpose: OtpPurpose
+    purpose: OtpPurpose = Field(
+        description="Must match the request purpose; REPORT_MISSING covers all account-free case types"
+    )
     code: str = Field(min_length=4, max_length=8, pattern=r"^\d+$")
 
 
@@ -61,17 +66,9 @@ class CaseStatusTokenResponse(StrictModel):
     scope: Literal["status:read"] = "status:read"
 
 
-class PublicMissingPersonCreate(StrictModel):
-    person_name: ShortText
-    approximate_age: int = Field(ge=0, le=120)
-    gender: Gender
-    last_seen_location: LocationText
-    last_seen_at: PastDatetime
-    clothing_description: LongText
+class PublicReporterFields(StrictModel):
     reporter_name: ShortText
     reporter_mobile_number: str = Field(min_length=8, max_length=20)
-    additional_description: LongText | None = None
-    age_group: AgeGroup | None = None
     reporter_email: EmailStr | None = None
     preferred_locale: Literal["en", "hi"] = "hi"
     notification_consent: bool = True
@@ -80,6 +77,53 @@ class PublicMissingPersonCreate(StrictModel):
         min_length=10,
         max_length=500,
     )
+
+
+class PublicMissingPersonCreate(PublicReporterFields):
+    person_name: ShortText
+    approximate_age: int = Field(ge=0, le=120)
+    gender: Gender
+    last_seen_location: LocationText
+    last_seen_at: PastDatetime
+    clothing_description: LongText
+    additional_description: LongText | None = None
+    age_group: AgeGroup | None = None
+
+
+class PublicFoundPersonCreate(PublicReporterFields):
+    physical_description: LongText
+    approximate_age: int | None = Field(None, ge=0, le=120)
+    age_group: AgeGroup | None = None
+    estimated_gender: Gender | None = None
+    clothing_description: LongText | None = None
+    identifying_marks: LongText | None = None
+    found_location: LocationText
+    found_at: PastDatetime
+    communication_status: CommunicationStatus | None = None
+    language: str | None = Field(None, min_length=1, max_length=100)
+    has_disability: bool | None = None
+    care_or_assistance_required: LongText | None = None
+    current_care_location: LocationText
+
+
+class PublicLostItemCreate(PublicReporterFields):
+    item_category: str = Field(min_length=2, max_length=64)
+    item_name: ShortText
+    item_description: LongText
+    brand_or_color: ShortText | None = None
+    identifying_features: LongText | None = None
+    last_seen_location: LocationText
+    last_seen_at: PastDatetime
+
+
+class PublicFoundItemCreate(PublicReporterFields):
+    item_category: str = Field(min_length=2, max_length=64)
+    item_name: ShortText
+    item_description: LongText
+    item_condition: ShortText | None = None
+    found_location: LocationText
+    found_at: PastDatetime
+    storage_location: LocationText
 
 
 class PublicSubmissionAck(StrictModel):
