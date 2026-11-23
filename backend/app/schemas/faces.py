@@ -77,7 +77,8 @@ class StaffNotificationRead(ReadModel):
     id: uuid.UUID
     kind: StaffNotificationKind
     status: StaffNotificationStatus
-    match_id: uuid.UUID
-    link: str = Field(description="Relative path to the match review screen")
+    match_id: uuid.UUID | None = None
+    case_id: uuid.UUID | None = None
+    link: str = Field(description="Relative path to the screen this notification is about")
     created_at: datetime
     read_at: datetime | None = None

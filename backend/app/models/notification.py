@@ -40,12 +40,16 @@ class Notification(TimestampMixin, Base):
     __tablename__ = "notifications"
     __table_args__ = (
         CheckConstraint("attempts >= 0", name="attempts_non_negative"),
-        CheckConstraint("(status = 'SENT') = (sent_at IS NOT NULL)", name="sent_at_matches_status"),
+        CheckConstraint(
+            "status NOT IN ('SENT', 'DELIVERED') OR sent_at IS NOT NULL", name="sent_at_matches_status"
+        ),
+        CheckConstraint("status <> 'DELIVERED' OR delivered_at IS NOT NULL", name="delivered_at_matches_status"),
         CheckConstraint("length(btrim(consent_statement)) > 0", name="consent_recorded"),
-        CheckConstraint("recipient_ciphertext IS NOT NULL OR status IN ('SENT', 'FAILED', 'CANCELLED')",
+        CheckConstraint("recipient_ciphertext IS NOT NULL OR status IN ('SENT', 'DELIVERED', 'FAILED', 'CANCELLED')",
                         name="pending_has_recipient"),
         Index("ix_notifications_queue", "next_attempt_at", postgresql_where=text("status IN ('PENDING', 'SENDING')")),
         Index("ix_notifications_case_created", "case_id", "created_at"),
+        Index("ix_notifications_provider_message", "provider", "provider_message_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -63,6 +67,9 @@ class Notification(TimestampMixin, Base):
     provider: Mapped[str | None] = mapped_column(String(32))
     provider_message_id: Mapped[str | None] = mapped_column(String(128))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_status: Mapped[str | None] = mapped_column(String(32))
+    provider_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)
     consent_statement: Mapped[str] = mapped_column(Text, nullable=False)
     requested_by_user_id: Mapped[uuid.UUID | None] = _user(nullable=True)
@@ -83,6 +90,7 @@ class StaffNotification(CreatedAtMixin, Base):
             name="staff_notification_read_at_matches_status",
         ),
         Index("ix_staff_notifications_recipient_created", "recipient_user_id", "created_at"),
+        UniqueConstraint("dedupe_key", name="uq_staff_notifications_dedupe_key"),
         Index(
             "ix_staff_notifications_recipient_unread",
             "recipient_user_id",
@@ -95,9 +103,14 @@ class StaffNotification(CreatedAtMixin, Base):
     kind: Mapped[StaffNotificationKind] = mapped_column(
         enum_type(StaffNotificationKind, "staff_notification_kind"), nullable=False
     )
-    match_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("case_matches.id", ondelete="CASCADE"), nullable=False
+    match_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("case_matches.id", ondelete="CASCADE")
     )
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE")
+    )
+    link: Mapped[str | None] = mapped_column(String(300))
+    dedupe_key: Mapped[str | None] = mapped_column(String(160))
     status: Mapped[StaffNotificationStatus] = mapped_column(
         enum_type(StaffNotificationStatus, "staff_notification_status"),
         nullable=False,

@@ -2,19 +2,26 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     admin,
+    assignments,
     audit,
     auth,
     cases,
+    chat,
     dashboard,
     devices,
+    events,
+    grievances,
+    integrations,
     locations,
     matches,
     media,
     public,
+    reference,
     reports,
     retention,
     staff_notifications,
     sync,
+    webhooks,
 )
 
 api_router = APIRouter()
@@ -26,7 +33,10 @@ api_router.include_router(public.router)
 api_router.include_router(public.admin_router)
 api_router.include_router(public.sightings_router)
 api_router.include_router(devices.router)
-# Type-specific routes must be registered before /cases/{case_id}.
+api_router.include_router(grievances.public_router)
+api_router.include_router(chat.public_router)
+# Type-specific and fixed /cases/... routes must be registered before /cases/{case_id}.
+api_router.include_router(assignments.router)
 for router in cases.type_routers:
     api_router.include_router(router)
 api_router.include_router(cases.shared)
@@ -38,3 +48,10 @@ api_router.include_router(audit.router)
 api_router.include_router(retention.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(reports.router)
+api_router.include_router(reference.router)
+api_router.include_router(grievances.router)
+api_router.include_router(events.router)
+api_router.include_router(integrations.router)
+api_router.include_router(integrations.alerts)
+api_router.include_router(chat.router)
+api_router.include_router(webhooks.router)

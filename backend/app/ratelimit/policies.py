@@ -52,6 +52,7 @@ def build_rules(settings: Settings) -> tuple[list[_Rule], Policy]:
     public_otp = Policy("public_otp", s.rate_limit_public_otp_per_minute, 60, "ip", fail_closed=True)
     public_submit = Policy("public_submit", s.rate_limit_public_submit_per_minute, 60, "ip", fail_closed=True)
     public_status = Policy("public_status", s.rate_limit_public_status_per_minute, 60, "ip", fail_closed=True)
+    chat = Policy("public_chat", s.rate_limit_public_chat_per_minute, 60, "ip", fail_closed=True)
     general = Policy("general", s.rate_limit_per_minute, 60, "user_or_ip")
     case_types = r"(missing-persons|found-persons|lost-items|found-items)"
     rules = [
@@ -73,6 +74,8 @@ def build_rules(settings: Settings) -> tuple[list[_Rule], Policy]:
         _Rule("POST", re.compile(rf"^/api/v1/public/{case_types}$"), public_submit),
         _Rule("POST", re.compile(r"^/api/v1/public/sightings$"), public_submit),
         _Rule("GET", re.compile(r"^/api/v1/public/cases/[^/]+/status$"), public_status),
+        _Rule("POST", re.compile(r"^/api/v1/public/grievances$"), public_submit),
+        _Rule("POST", re.compile(r"^/api/v1/public/chat/sessions(/[^/]+/messages)?$"), chat),
     ]
     return rules, general
 

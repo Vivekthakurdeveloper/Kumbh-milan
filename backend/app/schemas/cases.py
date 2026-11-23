@@ -309,4 +309,6 @@ class FoundItemCaseRead(CaseRead):
 
 # --- Search ----------------------------------------------------------------------------------------
 
-SortOrder = Literal["-created_at", "created_at", "-updated_at", "updated_at"]
+SortOrder = Literal[
+    "-created_at", "created_at", "-updated_at", "updated_at", "-urgency", "urgency", "-event_at", "event_at"
+]

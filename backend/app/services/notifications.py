@@ -289,3 +289,62 @@ def _failed_attempt(db: Session, n: Notification, case: Case, error: str, *, per
     db.commit()
     NOTIFICATION_OUTCOMES.labels(n.channel, "retry").inc()
     return "retry"
+
+
+DELIVERED_CODES = frozenset({"1", "DELIVERED", "DELIVRD", "SUCCESS", "READ"})
+FAILED_CODES = frozenset({"2", "8", "9", "16", "17", "25", "26", "FAILED", "REJECTED", "UNDELIV", "UNDELIVERED",
+                          "NDNC", "BLOCKED", "EXPIRED", "INVALID"})
+
+
+def classify_receipt(code: str | None) -> NotificationStatus | None:
+    value = (code or "").strip().upper()
+    if value in DELIVERED_CODES:
+        return S.DELIVERED
+    if value in FAILED_CODES:
+        return S.FAILED
+    return None
+
+
+def apply_delivery_receipt(
+    db: Session, *, provider: str, provider_message_id: str, provider_status: str | None
+) -> str:
+    """
+    Reconciles one provider receipt. Receipts are idempotent: DELIVERED is terminal and a late or duplicate
+    receipt never moves a message backwards. Returns the outcome for the webhook response.
+    """
+    target = classify_receipt(provider_status)
+    n = db.scalar(
+        select(Notification)
+        .where(Notification.provider_message_id == f"{provider}-{provider_message_id}"[:128])
+        .with_for_update()
+    )
+    if n is None:
+        return "unknown_message"
+    now = utcnow()
+    n.provider_status = (provider_status or "")[:32] or None
+    n.provider_status_at = now
+    if target is None or n.status not in (S.SENT, S.DELIVERED):
+        db.commit()
+        return "ignored"
+    if n.status == target:
+        db.commit()
+        return "duplicate"
+    if n.status == S.DELIVERED:
+        db.commit()
+        return "ignored"
+    previous = n.status
+    n.status = target
+    if target is S.DELIVERED:
+        n.delivered_at = now
+    else:
+        n.last_error = f"{provider}_receipt_{n.provider_status or 'failed'}"[:200]
+    case = db.get(Case, n.case_id)
+    record_audit(
+        db, action=AuditAction.NOTIFICATION_DELIVERY_UPDATED, entity_type="notification", entity_id=n.id,
+        actor_user_id=None, case=case, before={"status": previous}, after={"status": target, "provider": provider},
+    )
+    db.commit()
+    from app.observability.metrics import NOTIFICATION_RECEIPTS
+
+    NOTIFICATION_RECEIPTS.labels(provider, target.value.lower()).inc()
+    return target.value.lower()

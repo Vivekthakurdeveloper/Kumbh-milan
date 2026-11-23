@@ -2,20 +2,21 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, Select, func, literal_column, or_, select
+from sqlalchemy import ColumnElement, Select, case, func, literal_column, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from app.models import (
     Case,
     CaseContact,
+    Location,
     CaseNumberCounter,
     FoundItemDetails,
     FoundPersonDetails,
     LostItemDetails,
     MissingPersonDetails,
 )
-from app.models.enums import AgeGroup, CaseStatus, CaseType, Gender, UrgencyLevel
+from app.models.enums import AgeGroup, CaseStatus, CaseType, CustodyStatus, Gender, UrgencyLevel
 
 _MP, _FP, _LI, _FI = MissingPersonDetails, FoundPersonDetails, LostItemDetails, FoundItemDetails
 
@@ -48,6 +49,11 @@ class CaseFilters:
     language: str | None = None
     include_archived: bool = False
     sort: str = "-created_at"
+    custody_status: CustodyStatus | None = None
+    reported_by_user_id: uuid.UUID | None = None
+    has_contact: bool | None = None
+    location_id: uuid.UUID | None = None
+    sector_id: uuid.UUID | None = None
 
 
 def _like(value: str) -> str:
@@ -155,6 +161,37 @@ def search_cases(
         lang = _like(filters.language)
         conditions.append(or_(_MP.language.ilike(lang), _FP.language.ilike(lang)))
 
+    if filters.custody_status:
+        conditions.append(_FI.custody_status == filters.custody_status)
+    if filters.reported_by_user_id:
+        conditions.append(Case.reported_by_user_id == filters.reported_by_user_id)
+    if filters.has_contact is not None:
+        with_contact = Case.id.in_(select(CaseContact.case_id))
+        conditions.append(with_contact if filters.has_contact else ~with_contact)
+    if filters.location_id:
+        conditions.append(Case.location_id == filters.location_id)
+    if filters.sector_id:
+        conditions.append(
+            Case.location_id.in_(
+                select(Location.id).where(or_(Location.id == filters.sector_id, Location.sector_id == filters.sector_id))
+            )
+        )
+
+    urgency_rank = case(
+        (Case.urgency_level == UrgencyLevel.CRITICAL, 4),
+        (Case.urgency_level == UrgencyLevel.HIGH, 3),
+        (Case.urgency_level == UrgencyLevel.MEDIUM, 2),
+        (Case.urgency_level == UrgencyLevel.LOW, 1),
+        else_=0,
+    )
+    sorts = {
+        **_SORTS,
+        "-urgency": (urgency_rank.desc(), Case.created_at.desc(), Case.id.desc()),
+        "urgency": (urgency_rank.asc(), Case.created_at.asc(), Case.id.asc()),
+        "-event_at": (event_at.desc().nulls_last(), Case.id.desc()),
+        "event_at": (event_at.asc().nulls_last(), Case.id.asc()),
+    }
+
     def joined(stmt: Select) -> Select:
         return (
             stmt.outerjoin(_MP, _MP.case_id == Case.id)
@@ -173,7 +210,7 @@ def search_cases(
             contains_eager(Case.lost_item),
             contains_eager(Case.found_item),
         )
-        .order_by(*_SORTS.get(filters.sort, _SORTS["-created_at"]))
+        .order_by(*sorts.get(filters.sort, _SORTS["-created_at"]))
         .limit(limit)
         .offset(offset)
     )

@@ -9,10 +9,13 @@ from app.models import WorkerHeartbeat
 logger = logging.getLogger("kumbh_setu.worker")
 
 REQUIRED_WORKERS = ("scan", "notifications", "cleanup", "retention")
+# Reported by the operations worker (integrations, reports, grievance SLA). Visible in readiness detail but not
+# required until the deployment runs it.
+OPTIONAL_WORKERS = ("operations",)
 
 
 def record_heartbeat(worker_name: str, *, status: str = "ok") -> None:
-    if worker_name not in REQUIRED_WORKERS:
+    if worker_name not in REQUIRED_WORKERS + OPTIONAL_WORKERS:
         raise ValueError(f"unknown worker {worker_name}")
     if status not in {"ok", "degraded"}:
         raise ValueError("worker status must be ok or degraded")

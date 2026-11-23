@@ -11,8 +11,33 @@ from app.auth.permissions import Permission, require_permission
 from app.common.errors import NotFound
 from app.common.time import utcnow
 from app.models import StaffNotification, User
-from app.models.enums import StaffNotificationStatus
+from app.models.enums import StaffNotificationKind, StaffNotificationStatus
 from app.schemas.faces import StaffNotificationRead
+
+
+def notify(
+    db: Session,
+    recipient_user_ids: list[uuid.UUID] | set[uuid.UUID],
+    kind: StaffNotificationKind,
+    *,
+    link: str,
+    dedupe: str,
+    case_id: uuid.UUID | None = None,
+) -> int:
+    """Adds in-app notifications in the caller's transaction. `dedupe` makes repeated events a no-op."""
+    created = 0
+    for recipient in set(recipient_user_ids):
+        key = f"{kind.value}:{dedupe}:{recipient}"[:160]
+        if db.scalar(select(StaffNotification.id).where(StaffNotification.dedupe_key == key)) is not None:
+            continue
+        db.add(
+            StaffNotification(
+                recipient_user_id=recipient, kind=kind, case_id=case_id, link=link[:300], dedupe_key=key,
+                status=StaffNotificationStatus.UNREAD,
+            )
+        )
+        created += 1
+    return created
 
 
 def list_for_user(
@@ -63,7 +88,8 @@ def _read(row: StaffNotification) -> StaffNotificationRead:
         kind=row.kind,
         status=row.status,
         match_id=row.match_id,
-        link=f"/matches/{row.match_id}",
+        case_id=row.case_id,
+        link=row.link or (f"/matches/{row.match_id}" if row.match_id else "/"),
         created_at=row.created_at,
         read_at=row.read_at,
     )

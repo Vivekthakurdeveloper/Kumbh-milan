@@ -60,6 +60,7 @@ class OtpPurpose(StrEnum):
     REPORT_MISSING = "REPORT_MISSING"
     REPORT_SIGHTING = "REPORT_SIGHTING"
     CASE_STATUS = "CASE_STATUS"
+    GRIEVANCE = "GRIEVANCE"
 
 
 class SightingStatus(StrEnum):
@@ -223,6 +224,7 @@ class NotificationStatus(StrEnum):
     PENDING = "PENDING"
     SENDING = "SENDING"
     SENT = "SENT"
+    DELIVERED = "DELIVERED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
 
@@ -271,6 +273,130 @@ class FaceStatus(StrEnum):
 
 class StaffNotificationKind(StrEnum):
     MATCH_CANDIDATE = "MATCH_CANDIDATE"
+    CASE_ASSIGNED = "CASE_ASSIGNED"
+    ASSIGNMENT_APPROVAL_REQUESTED = "ASSIGNMENT_APPROVAL_REQUESTED"
+    ASSIGNMENT_DECIDED = "ASSIGNMENT_DECIDED"
+    GRIEVANCE_ASSIGNED = "GRIEVANCE_ASSIGNED"
+    GRIEVANCE_ESCALATED = "GRIEVANCE_ESCALATED"
+    REPORT_READY = "REPORT_READY"
+    CHAT_HANDOFF = "CHAT_HANDOFF"
+
+
+class AssignmentRequestStatus(StrEnum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+
+
+class GrievanceCategory(StrEnum):
+    SERVICE = "SERVICE"
+    STAFF_CONDUCT = "STAFF_CONDUCT"
+    DELAY = "DELAY"
+    OTHER = "OTHER"
+
+
+class GrievanceStatus(StrEnum):
+    OPEN = "OPEN"
+    ASSIGNED = "ASSIGNED"
+    IN_PROGRESS = "IN_PROGRESS"
+    RESOLVED = "RESOLVED"
+    CLOSED = "CLOSED"
+    REOPENED = "REOPENED"
+
+
+class GrievanceEventKind(StrEnum):
+    CREATED = "CREATED"
+    STATUS_CHANGED = "STATUS_CHANGED"
+    ASSIGNED = "ASSIGNED"
+    COMMENT = "COMMENT"
+    ESCALATED = "ESCALATED"
+
+
+class ReportType(StrEnum):
+    CASES = "CASES"
+    REUNIFICATIONS = "REUNIFICATIONS"
+    CUSTODY = "CUSTODY"
+    GRIEVANCES = "GRIEVANCES"
+    NOTIFICATIONS = "NOTIFICATIONS"
+
+
+class ReportJobStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
+
+
+class ReportCadence(StrEnum):
+    DAILY = "DAILY"
+    WEEKLY = "WEEKLY"
+
+
+class IntegrationKind(StrEnum):
+    PUBLIC_ADDRESS = "PUBLIC_ADDRESS"
+    DISPLAY = "DISPLAY"
+    SOCIAL = "SOCIAL"
+    GOVERNMENT = "GOVERNMENT"
+
+
+class IntegrationAdapter(StrEnum):
+    MOCK = "MOCK"
+    WEBHOOK = "WEBHOOK"
+
+
+class IntegrationHealth(StrEnum):
+    UNKNOWN = "UNKNOWN"
+    HEALTHY = "HEALTHY"
+    DEGRADED = "DEGRADED"
+
+
+class AlertStatus(StrEnum):
+    DRAFT = "DRAFT"
+    APPROVED = "APPROVED"
+    PUBLISHED = "PUBLISHED"
+    WITHDRAWN = "WITHDRAWN"
+    EXPIRED = "EXPIRED"
+
+
+class DispatchOperation(StrEnum):
+    PUBLISH = "PUBLISH"
+    WITHDRAW = "WITHDRAW"
+    CASE_EXPORT = "CASE_EXPORT"
+
+
+class DispatchStatus(StrEnum):
+    PENDING = "PENDING"
+    SENDING = "SENDING"
+    DELIVERED = "DELIVERED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class InboundMessageStatus(StrEnum):
+    QUARANTINED = "QUARANTINED"
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+
+
+class ChatChannel(StrEnum):
+    WEB = "WEB"
+    APP = "APP"
+    WHATSAPP = "WHATSAPP"
+
+
+class ChatSessionStatus(StrEnum):
+    OPEN = "OPEN"
+    HANDED_OFF = "HANDED_OFF"
+    CLOSED = "CLOSED"
+
+
+class ChatRole(StrEnum):
+    USER = "USER"
+    ASSISTANT = "ASSISTANT"
+    STAFF = "STAFF"
 
 
 class StaffNotificationStatus(StrEnum):

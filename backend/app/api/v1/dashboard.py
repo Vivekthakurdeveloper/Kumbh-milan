@@ -4,7 +4,8 @@ from fastapi import APIRouter, Query
 
 from app.api.v1.responses import AUTHED
 from app.auth.dependencies import CurrentPrincipal, DbSession
-from app.schemas.dashboard import DashboardSummary
+from app.schemas.dashboard import DashboardAnalytics, DashboardSummary
+from app.services import analytics as analytics_service
 from app.services import dashboard as dashboard_service
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -37,3 +38,9 @@ def summary(principal: CurrentPrincipal, db: DbSession, from_: PeriodFrom = None
     omitted; the window may not exceed 366 days. Without either, the original all-time behaviour is unchanged.
     """
     return dashboard_service.summary(db, principal.user, from_=from_, to=to)
+
+
+@router.get("/analytics", response_model=DashboardAnalytics, responses=AUTHED,
+            summary="Breakdowns, median durations, unresolved age, and recent activity (default: last 30 days)")
+def analytics(principal: CurrentPrincipal, db: DbSession, from_: PeriodFrom = None, to: PeriodTo = None):
+    return analytics_service.analytics(db, principal.user, from_=from_, to=to)

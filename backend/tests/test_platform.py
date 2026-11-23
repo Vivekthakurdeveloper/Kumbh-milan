@@ -17,7 +17,8 @@ def test_openapi_documents_every_operation(client):
         assert {"get", "patch"} <= set(paths[f"{API}/cases/{kind}/{{case_id}}"])
         assert "post" in paths[f"{API}/cases/{kind}/{{case_id}}/assign"]
         assert "post" in paths[f"{API}/cases/{kind}/{{case_id}}/status"]
-    public_prefixes = (f"{API}/public/", f"{API}/devices/")
+    # Webhooks authenticate with a provider shared secret or HMAC signature instead of a bearer token.
+    public_prefixes = (f"{API}/public/", f"{API}/devices/", f"{API}/webhooks/")
     # Credentials-by-body or credentials-in-path endpoints: the token or code is the credential.
     public = {
         f"{API}/auth/login",

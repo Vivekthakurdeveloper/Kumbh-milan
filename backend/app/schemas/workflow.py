@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from app.models.enums import (
+    AssignmentRequestStatus,
     CaseStatus,
     ConfidenceBand,
     CustodyStatus,
@@ -31,6 +32,45 @@ class AssignRequest(StrictModel):
     assignee_user_id: uuid.UUID
     reason: Reason | None = None
     expected_version: int | None = ExpectedVersion
+
+
+class UnassignRequest(StrictModel):
+    reason: Reason
+    expected_version: int | None = ExpectedVersion
+
+
+class AssignmentRequestRead(ReadModel):
+    id: uuid.UUID
+    case_id: uuid.UUID
+    assignee_user_id: uuid.UUID
+    requested_by_user_id: uuid.UUID
+    reason: str | None
+    status: AssignmentRequestStatus
+    decided_by_user_id: uuid.UUID | None
+    decided_at: datetime | None
+    decision_reason: str | None
+    created_at: datetime
+
+
+class AssignmentDecisionRequest(StrictModel):
+    reason: Reason | None = None
+
+
+class BulkAssignRequest(StrictModel):
+    case_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    assignee_user_id: uuid.UUID
+    reason: Reason | None = None
+
+
+class BulkAssignItem(BaseModel):
+    case_id: uuid.UUID
+    outcome: Literal["ASSIGNED", "REQUESTED", "FAILED"]
+    error_code: str | None = None
+    request_id: uuid.UUID | None = None
+
+
+class BulkAssignResult(BaseModel):
+    items: list[BulkAssignItem]
 
 
 class StatusChangeRequest(StrictModel):
@@ -92,6 +132,8 @@ class AssignmentRead(ReadModel):
     unassigned_at: datetime | None
     reason: str | None
     is_active: bool
+    unassigned_by_user_id: uuid.UUID | None = None
+    unassign_reason: str | None = None
 
 
 class StatusHistoryRead(ReadModel):

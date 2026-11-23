@@ -43,6 +43,13 @@ SCAN_OUTCOMES = Counter("kumbh_scan_outcomes_total", "Malware scan outcomes", ["
 NOTIFICATION_OUTCOMES = Counter(
     "kumbh_notification_outcomes_total", "Notification delivery outcomes", ["channel", "outcome"], registry=REGISTRY
 )
+NOTIFICATION_RECEIPTS = Counter(
+    "kumbh_notification_receipts_total", "Provider delivery receipts", ["provider", "outcome"], registry=REGISTRY
+)
+DISPATCH_OUTCOMES = Counter(
+    "kumbh_outbound_dispatch_outcomes_total", "External integration delivery outcomes", ["kind", "outcome"],
+    registry=REGISTRY,
+)
 RETENTION_ACTIONS = Counter(
     "kumbh_retention_actions_total", "Retention job outcomes", ["policy", "outcome"], registry=REGISTRY
 )
@@ -61,6 +68,21 @@ class DatabaseStateCollector(Collector):
         "staff_notifications_unread": "SELECT count(*) FROM staff_notifications WHERE status = 'UNREAD'",
         "notifications_pending": "SELECT count(*) FROM notifications WHERE status IN ('PENDING', 'SENDING')",
         "notifications_failed": "SELECT count(*) FROM notifications WHERE status = 'FAILED'",
+        "notifications_oldest_pending_seconds": (
+            "SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(created_at)), 0) FROM notifications "
+            "WHERE status IN ('PENDING', 'SENDING')"
+        ),
+        "notifications_awaiting_receipt": "SELECT count(*) FROM notifications WHERE status = 'SENT'",
+        "outbound_dispatches_pending": "SELECT count(*) FROM outbound_dispatches WHERE status IN ('PENDING', 'SENDING')",
+        "outbound_dispatches_failed": "SELECT count(*) FROM outbound_dispatches WHERE status = 'FAILED'",
+        "inbound_messages_quarantined": (
+            "SELECT count(*) FROM inbound_integration_messages WHERE status = 'QUARANTINED'"
+        ),
+        "report_jobs_queued": "SELECT count(*) FROM report_jobs WHERE status IN ('QUEUED', 'RUNNING')",
+        "grievances_overdue": (
+            "SELECT count(*) FROM grievances WHERE status NOT IN ('RESOLVED', 'CLOSED') AND due_at < now()"
+        ),
+        "chat_sessions_awaiting_staff": "SELECT count(*) FROM chat_sessions WHERE status = 'HANDED_OFF'",
         "worker_heartbeats_not_ok": (
             "SELECT count(*) FROM worker_heartbeats "
             "WHERE status <> 'ok' OR heartbeat_at < now() - interval '3 minutes'"

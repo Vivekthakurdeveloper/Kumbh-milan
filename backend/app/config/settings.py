@@ -155,6 +155,46 @@ class Settings(BaseSettings):
         description="Map of NotificationTemplate value -> MSG91 DLT template id",
     )
     msg91_timeout_seconds: float = 10.0
+    msg91_webhook_secret: str | None = Field(
+        None, description="Shared secret MSG91 sends in X-Webhook-Token with delivery receipts; never log this value"
+    )
+
+    assignment_requires_approval: bool = Field(
+        True, description="Police assignments become requests that an ADMIN supervisor approves"
+    )
+    grievance_sla_hours: int = Field(72, ge=1, le=720)
+    grievance_max_escalation_level: int = Field(2, ge=1, le=5)
+    report_max_rows: int = Field(50_000, ge=100, le=500_000)
+    report_max_period_days: int = Field(92, ge=1, le=366)
+    report_artifact_ttl_hours: int = Field(72, ge=1, le=720)
+    report_download_ttl_seconds: int = Field(300, ge=30, le=3600)
+    integration_retry_base_seconds: int = 30
+    integration_circuit_failures: int = 5
+    integration_circuit_open_seconds: int = 300
+    integration_signature_tolerance_seconds: int = 300
+    integration_allowed_hosts: list[str] = Field(
+        default_factory=list,
+        description="Hostnames outbound webhooks may call. Empty allows any host only in local/test.",
+    )
+    realtime_poll_interval_seconds: float = Field(2.0, ge=0.1, le=30)
+    realtime_stream_max_seconds: int = Field(25, ge=1, le=300)
+    realtime_lag_seconds: float = Field(
+        2.0, ge=0, le=60, description="Events newer than this are held back so out-of-order commits are not skipped"
+    )
+    chat_llm_provider: Literal["disabled", "mock", "openai_compatible"] = Field(
+        "disabled",
+        description="openai_compatible targets a self-hosted endpoint (vLLM, Ollama, llama.cpp) inside the deployment",
+    )
+    chat_llm_base_url: str | None = None
+    chat_llm_model: str | None = None
+    chat_llm_api_key: str | None = None
+    chat_llm_timeout_seconds: float = 15.0
+    chat_session_ttl_minutes: int = 60
+    chat_max_messages_per_session: int = 40
+    chat_supported_locales: list[str] = Field(
+        default_factory=lambda: ["en", "hi", "bn", "mr", "gu", "ta", "te", "kn", "ml", "pa", "or", "ur"],
+        description="Locales the chatbot accepts. Deterministic replies exist for en/hi; others need the LLM.",
+    )
 
     smtp_enabled: bool = False
     smtp_host: str | None = None
@@ -222,6 +262,7 @@ class Settings(BaseSettings):
     rate_limit_public_otp_per_minute: int = 10
     rate_limit_public_submit_per_minute: int = 20
     rate_limit_public_status_per_minute: int = 30
+    rate_limit_public_chat_per_minute: int = 30
     workers_required: bool = Field(
         False,
         description="When true, readiness fails unless scan, notification, cleanup, and retention workers have fresh heartbeats.",
@@ -264,6 +305,12 @@ class Settings(BaseSettings):
                 raise ValueError("NOTIFICATION_PROVIDER=console/mock is local/test only")
             if self.notification_provider == "msg91" and not self.msg91_auth_key:
                 raise ValueError("NOTIFICATION_PROVIDER=msg91 requires MSG91_AUTH_KEY")
+            if self.notification_provider == "msg91" and not self.msg91_webhook_secret:
+                raise ValueError("NOTIFICATION_PROVIDER=msg91 requires MSG91_WEBHOOK_SECRET for delivery receipts")
+            if self.chat_llm_provider == "mock":
+                raise ValueError("CHAT_LLM_PROVIDER=mock is local/test only")
+            if self.chat_llm_provider == "openai_compatible" and not (self.chat_llm_base_url and self.chat_llm_model):
+                raise ValueError("CHAT_LLM_PROVIDER=openai_compatible requires CHAT_LLM_BASE_URL and CHAT_LLM_MODEL")
             if self.smtp_enabled and (not self.smtp_host or not self.smtp_from_email):
                 raise ValueError("SMTP_ENABLED requires SMTP_HOST and SMTP_FROM_EMAIL")
             if self.fcm_enabled and not (self.fcm_credentials_json or self.fcm_credentials_file):

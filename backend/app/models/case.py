@@ -63,6 +63,7 @@ class Case(TimestampMixin, Base):
         ),
         Index("ix_cases_type_status_created", "case_type", "status", "created_at"),
         Index("ix_cases_station_created", "station_id", "created_at"),
+        Index("ix_cases_urgency_created", "urgency_level", "created_at"),
         Index("ix_cases_created_id", "created_at", "id"),
         Index("ix_cases_search_vector", "search_vector", postgresql_using="gin"),
         Index("ix_cases_geo", "geo", postgresql_using="gist"),
@@ -275,6 +276,7 @@ class FoundItemDetails(_CaseSubtype, Base):
         nullable=False,
         default=CustodyStatus.IN_CUSTODY,
         server_default=CustodyStatus.IN_CUSTODY.value,
+        index=True,
     )
     handover_acknowledgement: Mapped[str | None] = mapped_column(Text)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

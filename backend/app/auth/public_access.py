@@ -26,6 +26,10 @@ _CASE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("POST", re.compile(rf"^/api/v1/cases/{_UUID}/notes$")),
     ("GET", re.compile(rf"^/api/v1/cases/{_UUID}/attachments$")),
     ("POST", re.compile(rf"^/api/v1/cases/{_UUID}/attachments$")),
+    ("POST", re.compile(r"^/api/v1/public/grievances$")),
+    ("GET", re.compile(r"^/api/v1/public/grievances$")),
+    ("GET", re.compile(r"^/api/v1/public/grievances/[A-Za-z0-9-]{3,32}$")),
+    ("POST", re.compile(r"^/api/v1/public/grievances/[A-Za-z0-9-]{3,32}/(?:comments|reopen)$")),
 ]
 
 

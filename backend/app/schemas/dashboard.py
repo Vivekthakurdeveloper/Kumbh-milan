@@ -1,6 +1,7 @@
+import uuid
 from datetime import datetime
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from app.schemas.common import ReadModel
 
@@ -31,3 +32,37 @@ class DashboardSummary(ReadModel):
     )
     attachments_awaiting_scan: int
     notifications_failed: int
+
+
+class MedianDurations(BaseModel):
+    to_assignment: float | None
+    to_confirmed_match: float | None
+    to_reunification_or_return: float | None
+    to_closure: float | None
+
+
+class RecentActivity(BaseModel):
+    type: str
+    case_id: uuid.UUID | None
+    case_number: str | None
+    occurred_at: datetime
+
+
+class DashboardAnalytics(BaseModel):
+    generated_at: datetime
+    period_from: datetime
+    period_to: datetime
+    registered_total: int
+    by_station: dict[str, int]
+    by_case_type: dict[str, int]
+    by_urgency: dict[str, int]
+    by_status: dict[str, int]
+    by_sector: dict[str, int] = Field(description="Sector location id (or UNLINKED) -> cases registered")
+    by_day: dict[str, int] = Field(description="Asia/Kolkata calendar day -> cases registered")
+    median_seconds: MedianDurations
+    unresolved_age: dict[str, int] = Field(description="Active cases by time since registration")
+    resolved_in_period: int
+    notifications_failed: int
+    grievances_open: int
+    grievances_overdue: int
+    recent_activity: list[RecentActivity]

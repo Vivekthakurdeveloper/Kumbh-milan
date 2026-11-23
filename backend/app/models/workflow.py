@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base
 from app.models.enums import (
+    AssignmentRequestStatus,
     CaseStatus,
     CaseType,
     ConfidenceBand,
@@ -75,6 +76,8 @@ class CaseAssignment(Base):
     unassigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reason: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    unassigned_by_user_id: Mapped[uuid.UUID | None] = _user_fk(nullable=True)
+    unassign_reason: Mapped[str | None] = mapped_column(Text)
 
 
 class CaseNote(CreatedAtMixin, Base):
@@ -331,3 +334,37 @@ class CaseContact(TimestampMixin, Base):
     preferred_locale: Mapped[str | None] = mapped_column(String(8))
     notification_consent_statement: Mapped[str | None] = mapped_column(Text)
     notification_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CaseAssignmentRequest(TimestampMixin, Base):
+    """An assignment awaiting supervisor (ADMIN) approval. Approval applies it through the normal assign path."""
+
+    __tablename__ = "case_assignment_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status = 'PENDING' OR (decided_by_user_id IS NOT NULL AND decided_at IS NOT NULL)",
+            name="decided_fields_present",
+        ),
+        Index(
+            "uq_case_assignment_requests_one_pending",
+            "case_id",
+            unique=True,
+            postgresql_where=text("status = 'PENDING'"),
+        ),
+        Index("ix_case_assignment_requests_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    case_id: Mapped[uuid.UUID] = _case_fk()
+    assignee_user_id: Mapped[uuid.UUID] = _user_fk()
+    requested_by_user_id: Mapped[uuid.UUID] = _user_fk()
+    reason: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[AssignmentRequestStatus] = mapped_column(
+        enum_type(AssignmentRequestStatus, "assignment_request_status"),
+        nullable=False,
+        default=AssignmentRequestStatus.PENDING,
+        server_default=AssignmentRequestStatus.PENDING.value,
+    )
+    decided_by_user_id: Mapped[uuid.UUID | None] = _user_fk(nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[str | None] = mapped_column(Text)

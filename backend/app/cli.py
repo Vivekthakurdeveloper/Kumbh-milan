@@ -277,6 +277,67 @@ def maintenance_worker(args: argparse.Namespace) -> int:
     return 0 if status == "ok" else 1
 
 
+def operations_worker(args: argparse.Namespace) -> int:
+    """Outbound integrations, alert expiry, MIS reports and schedules, grievance SLA escalation, chat cleanup."""
+    import logging
+    import signal
+    import time
+
+    from app.config import get_settings
+    from app.observability import configure_logging
+    from app.services import chatbot, grievances, integrations, mis_reports
+    from app.storage import get_storage
+    from app.workers.runtime import beat
+
+    settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format)
+    log = logging.getLogger("kumbh_setu.operations_worker")
+    stopping = False
+
+    def stop(*_):
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    passes = 0
+    status = "ok"
+    while not stopping:
+        status = "ok"
+        outcome: dict[str, object] = {}
+        steps = (
+            ("dispatch_released", lambda db: integrations.release_stale(db)),
+            ("dispatch", lambda db: integrations.deliver_due(db, limit=args.batch_size)),
+            ("alerts_expired", lambda db: integrations.expire_alerts(db)),
+            ("schedules", lambda db: mis_reports.run_due_schedules(db)),
+            ("reports", lambda db: mis_reports.run_queued(db, get_storage())),
+            ("reports_expired", lambda db: mis_reports.expire_artifacts(db, get_storage())),
+            ("grievances_escalated", lambda db: grievances.escalate_overdue(db)),
+        )
+        for name, step in steps:
+            try:
+                with SessionLocal() as db:
+                    outcome[name] = step(db)
+            except Exception as exc:  # noqa: BLE001
+                status = "degraded"
+                log.warning("Operations step failed", extra={"step": name, "error": type(exc).__name__})
+        if passes % 360 == 0:
+            try:
+                with SessionLocal() as db:
+                    outcome["chat_sessions_purged"] = chatbot.purge_old(db)
+            except Exception as exc:  # noqa: BLE001
+                status = "degraded"
+                log.warning("Chat purge failed", extra={"error": type(exc).__name__})
+        passes += 1
+        beat("operations", status=status)
+        if any(v for v in outcome.values() if isinstance(v, int)) or isinstance(outcome.get("dispatch"), dict):
+            log.info("Operations pass", extra={k: v for k, v in outcome.items()})
+        if args.once:
+            break
+        time.sleep(args.interval)
+    return 0 if status == "ok" else 1
+
+
 def schema_status(_args: argparse.Namespace) -> int:
     """Print the applied Alembic revision without connection details."""
     from sqlalchemy import text
@@ -378,6 +439,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--login-attempt-days", type=int, default=90)
     p.add_argument("--session-days", type=int, default=30)
     p.set_defaults(func=maintenance_worker)
+
+    p = sub.add_parser("operations-worker", help="Integrations, alerts, MIS reports, grievance SLA escalation")
+    p.add_argument("--once", action="store_true")
+    p.add_argument("--batch-size", type=int, default=50)
+    p.add_argument("--interval", type=float, default=10.0)
+    p.set_defaults(func=operations_worker)
 
     p = sub.add_parser("schema-status", help="Compare the database revision with the revision this build expects")
     p.set_defaults(func=schema_status)

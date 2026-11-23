@@ -39,6 +39,20 @@ class Permission(StrEnum):
     PUBLIC_INFORMATION_MANAGE = "public_information:manage"
     SIGHTING_READ = "sighting:read"
 
+    ASSIGNMENT_APPROVE = "assignment:approve"
+    REFERENCE_MANAGE = "reference:manage"
+    GRIEVANCE_READ = "grievance:read"
+    GRIEVANCE_MANAGE = "grievance:manage"
+    ANALYTICS_READ = "analytics:read"
+    REPORT_GENERATE = "report:generate"
+    REPORT_SCHEDULE = "report:schedule"
+    ALERT_DRAFT = "alert:draft"
+    ALERT_APPROVE = "alert:approve"
+    INTEGRATION_MANAGE = "integration:manage"
+    INTEGRATION_EXPORT = "integration:export"
+    INBOUND_REVIEW = "integration:inbound_review"
+    CHAT_HANDOFF = "chat:handoff"
+
 
 _HELP_DESK = frozenset(
     {
@@ -52,6 +66,9 @@ _HELP_DESK = frozenset(
         Permission.MATCH_PROPOSE,
         Permission.NOTIFICATION_SEND,
         Permission.SIGHTING_READ,
+        Permission.GRIEVANCE_READ,
+        Permission.GRIEVANCE_MANAGE,
+        Permission.CHAT_HANDOFF,
     }
 )
 
@@ -68,6 +85,10 @@ _POLICE = _HELP_DESK | frozenset(
         Permission.NOTE_SENSITIVE,
         Permission.ATTACHMENT_DELETE,
         Permission.MATCH_REVIEW,
+        Permission.ANALYTICS_READ,
+        Permission.REPORT_GENERATE,
+        Permission.ALERT_DRAFT,
+        Permission.INBOUND_REVIEW,
     }
 )
 
@@ -79,6 +100,12 @@ _ADMIN = _POLICE | frozenset(
         Permission.RETENTION_MANAGE,
         Permission.AUDIT_READ,
         Permission.PUBLIC_INFORMATION_MANAGE,
+        Permission.ASSIGNMENT_APPROVE,
+        Permission.REFERENCE_MANAGE,
+        Permission.REPORT_SCHEDULE,
+        Permission.ALERT_APPROVE,
+        Permission.INTEGRATION_MANAGE,
+        Permission.INTEGRATION_EXPORT,
     }
 )
 

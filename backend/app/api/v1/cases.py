@@ -3,10 +3,11 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile, status
+from fastapi.responses import JSONResponse
 
 from app.api.v1.responses import AUTHED, errors
 from app.auth.dependencies import CurrentPrincipal, DbSession
-from app.models.enums import AgeGroup, CaseStatus, CaseType, Gender, MediaType, ScanStatus, UrgencyLevel
+from app.models.enums import AgeGroup, CaseStatus, CaseType, CustodyStatus, Gender, MediaType, ScanStatus, UrgencyLevel
 from app.repositories.cases import CaseFilters
 from app.schemas.cases import (
     CaseSummary,
@@ -30,6 +31,8 @@ from app.schemas.public import PublicReviewRequest
 from app.schemas.workflow import (
     MatchGenerateResult,
     AssignRequest,
+    AssignmentRequestRead,
+    UnassignRequest,
     AttachmentDeleteRequest,
     AttachmentDownload,
     AttachmentRead,
@@ -45,6 +48,7 @@ from app.schemas.workflow import (
     NoteRead,
     StatusChangeRequest,
 )
+from app.services import assignments as assignment_service
 from app.services import attachments as attachment_service
 from app.services import cases as case_service
 from app.services import geo as geo_service
@@ -110,13 +114,19 @@ def case_filters(
     language: Annotated[str | None, Query(max_length=100)] = None,
     include_archived: Annotated[bool, Query(description="Include archived cases (police and admins)")] = False,
     sort: SortOrder = "-created_at",
+    custody_status: CustodyStatus | None = None,
+    reported_by_user_id: uuid.UUID | None = None,
+    has_contact: Annotated[bool | None, Query(description="Only cases with (true) or without (false) a contact")] = None,
+    location_id: uuid.UUID | None = None,
+    sector_id: Annotated[uuid.UUID | None, Query(description="A sector and every location inside it")] = None,
 ) -> CaseFilters:
     return CaseFilters(
         q=q, case_number=case_number, statuses=status_ or [], urgency_level=urgency_level, station_id=station_id,
         assigned_to_user_id=assigned_to_user_id, unassigned=unassigned, location=location,
         created_from=created_from, created_to=created_to, event_from=event_from, event_to=event_to,
         item_category=item_category, age_group=age_group, gender=gender, language=language,
-        include_archived=include_archived, sort=sort,
+        include_archived=include_archived, sort=sort, custody_status=custody_status,
+        reported_by_user_id=reported_by_user_id, has_contact=has_contact, location_id=location_id, sector_id=sector_id,
     )
 
 
@@ -171,13 +181,35 @@ def build_case_type_router(spec: CaseTypeSpec) -> APIRouter:
         return case_service.to_read(db, case, spec, actor=principal.user)
 
     @router.post(
-        "/{case_id}/assign", response_model=Read, responses=STATE, name=f"assign_{spec.relationship}",
-        summary="Assign or reassign to a police officer (history is preserved)",
+        "/{case_id}/unassign", response_model=Read, responses=STATE, name=f"unassign_{spec.relationship}",
+        summary="Remove the current assignee with a recorded reason (case returns to UNDER_REVIEW)",
+    )
+    def unassign(case_id: uuid.UUID, payload: UnassignRequest, principal: CurrentPrincipal, db: DbSession):
+        workflow_service.unassign_case(db, principal.user, spec, case_id, payload.reason, payload.expected_version)
+        db.expire_all()
+        return case_service.to_read(
+            db, case_service.get_case(db, principal.user, case_id, spec), spec, actor=principal.user
+        )
+
+    @router.post(
+        "/{case_id}/assign", response_model=Read, responses={**STATE, 202: {"model": AssignmentRequestRead}},
+        name=f"assign_{spec.relationship}",
+        summary="Assign or reassign (202 with a pending request when supervisor approval is required)",
     )
     def assign(
         case_id: uuid.UUID, payload: AssignRequest, principal: CurrentPrincipal, db: DbSession, response: Response,
         idempotency_key: IdempotencyKey = None,
     ):
+        if assignment_service.approval_required(principal.user):
+            case_service.get_case(db, principal.user, case_id, spec)
+            request = assignment_service.create_request(
+                db, principal.user, case_id, payload.assignee_user_id, payload.reason
+            )
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content=AssignmentRequestRead.model_validate(request).model_dump(mode="json"),
+                headers={"Location": f"/api/v1/assignment-requests/{request.id}"},
+            )
         replayed = workflow_service.assign_case(db, principal.user, spec, case_id, payload, idempotency_key=idempotency_key)
         _mark_replay(response, replayed)
         db.expire_all()

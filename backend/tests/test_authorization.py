@@ -88,7 +88,7 @@ def test_police_can_only_assign_officers_from_own_station(client, actors):
     )
     assert r.status_code == 403
     r = client.post(
-        f"{API}/cases/lost-items/{case['id']}/assign", json={"assignee_user_id": str(actors.helpdesk.id)},
+        f"{API}/cases/lost-items/{case['id']}/assign", json={"assignee_user_id": str(actors.admin.id)},
         headers=actors.police.headers,
     )
     assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_assignee"

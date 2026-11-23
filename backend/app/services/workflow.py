@@ -197,15 +197,36 @@ def assign_case(
 def _assign(db: Session, actor: User, spec: CaseTypeSpec, case_id: uuid.UUID, req: AssignRequest) -> None:
     case = load_case(db, actor, case_id, spec=spec, for_update=True)
     check_version(case, req.expected_version)
+    assignee = validate_assignee(db, actor, case, req.assignee_user_id)
+    apply_assignment(db, actor, case, assignee, req.reason)
+    db.commit()
+
+
+ASSIGNABLE_ROLES = frozenset({Role.POLICE_OFFICER, Role.HELP_DESK_OPERATOR})
+
+
+def validate_assignee(db: Session, actor: User, case: Case, assignee_user_id: uuid.UUID) -> User:
+    """Officers may take cases from their station; help-desk operators only cases registered at their desk."""
     if case.status in INACTIVE_STATUSES:
         raise Conflict("Resolved or closed cases cannot be reassigned", code="case_inactive")
-    assignee = db.get(User, req.assignee_user_id)
-    if assignee is None or not assignee.is_active or assignee.role != Role.POLICE_OFFICER:
-        raise ValidationFailed("Assignee must be an active police officer", code="invalid_assignee")
+    assignee = db.get(User, assignee_user_id)
+    if assignee is None or not assignee.is_active or Role(assignee.role) not in ASSIGNABLE_ROLES:
+        raise ValidationFailed("Assignee must be an active police officer or help-desk operator", code="invalid_assignee")
     if Role(actor.role) is not Role.ADMIN and assignee.station_id != actor.station_id:
         raise Forbidden("You can only assign officers from your own station", code="station_scope")
+    if Role(assignee.role) is Role.HELP_DESK_OPERATOR and assignee.station_id != case.station_id:
+        raise ValidationFailed(
+            "Help-desk operators can only be assigned cases registered at their desk", code="invalid_assignee"
+        )
     if case.assigned_to_user_id == assignee.id:
         raise Conflict("Case is already assigned to this officer", code="already_assigned")
+    return assignee
+
+
+def apply_assignment(db: Session, actor: User, case: Case, assignee: User, reason: str | None) -> None:
+    """Closes the active assignment row, opens a new one, audits, and notifies the assignee. No commit."""
+    from app.models.enums import StaffNotificationKind
+    from app.services import staff_notifications
 
     now = utcnow()
     active = db.scalar(
@@ -214,11 +235,13 @@ def _assign(db: Session, actor: User, spec: CaseTypeSpec, case_id: uuid.UUID, re
     if active is not None:
         active.is_active = False
         active.unassigned_at = now
+        active.unassigned_by_user_id = actor.id
+        active.unassign_reason = "Reassigned"
         db.flush()
     db.add(
         CaseAssignment(
             case_id=case.id, assigned_to_user_id=assignee.id, assigned_by_user_id=actor.id,
-            assigned_at=now, reason=req.reason, is_active=True,
+            assigned_at=now, reason=reason, is_active=True,
         )
     )
     previous_assignee = case.assigned_to_user_id
@@ -227,10 +250,43 @@ def _assign(db: Session, actor: User, spec: CaseTypeSpec, case_id: uuid.UUID, re
     record_audit(
         db, action=AuditAction.CASE_ASSIGNED, entity_type="case", entity_id=case.id, actor_user_id=actor.id,
         case=case, before={"assigned_to_user_id": previous_assignee}, after={"assigned_to_user_id": assignee.id},
-        reason=req.reason,
+        reason=reason,
     )
     if CaseStatus(case.status) in AUTO_ASSIGN_SOURCES:
-        _apply_transition(db, case, S.ASSIGNED, actor, req.reason or "Assigned to officer")
+        _apply_transition(db, case, S.ASSIGNED, actor, reason or "Assigned to officer")
+    if assignee.id != actor.id:
+        staff_notifications.notify(
+            db, [assignee.id], StaffNotificationKind.CASE_ASSIGNED, link=f"/cases/{case.id}",
+            dedupe=f"{case.id}:{now.isoformat()}", case_id=case.id,
+        )
+
+
+def unassign_case(
+    db: Session, actor: User, spec: CaseTypeSpec, case_id: uuid.UUID, reason: str, expected_version: int | None
+) -> None:
+    require_permission(actor, Permission.CASE_ASSIGN)
+    case = load_case(db, actor, case_id, spec=spec, for_update=True)
+    check_version(case, expected_version)
+    if case.status in INACTIVE_STATUSES:
+        raise Conflict("Resolved or closed cases cannot be unassigned", code="case_inactive")
+    active = db.scalar(
+        select(CaseAssignment).where(CaseAssignment.case_id == case.id, CaseAssignment.is_active.is_(True))
+    )
+    if active is None or case.assigned_to_user_id is None:
+        raise Conflict("Case is not assigned", code="not_assigned")
+    active.is_active = False
+    active.unassigned_at = utcnow()
+    active.unassigned_by_user_id = actor.id
+    active.unassign_reason = reason
+    previous = case.assigned_to_user_id
+    case.assigned_to_user_id = None
+    case.updated_at = func.now()
+    record_audit(
+        db, action=AuditAction.CASE_UNASSIGNED, entity_type="case", entity_id=case.id, actor_user_id=actor.id,
+        case=case, before={"assigned_to_user_id": previous}, after={"assigned_to_user_id": None}, reason=reason,
+    )
+    if CaseStatus(case.status) is S.ASSIGNED:
+        _apply_transition(db, case, S.UNDER_REVIEW, actor, reason)
     db.commit()
 
 

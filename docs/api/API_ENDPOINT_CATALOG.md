@@ -241,6 +241,50 @@ All routes require staff Bearer authentication and apply normal case scope.
 | POST | `/api/v1/sync/attachments/sessions/{id}/finalize` | Verify size/checksum and enter quarantine/scanning | 200 `AttachmentUploadFinalizeResponse` | 404; 409; 415; 422 `upload_checksum_mismatch`; 503 | Implemented — tested |
 | DELETE | `/api/v1/sync/attachments/sessions/{id}` | Abort incomplete upload | 200 `AttachmentUploadSessionRead` | 404; 409 | Implemented — tested |
 
+## 11d. Operations modules (schema revision `0017`)
+
+Background work (integration delivery, alert expiry, MIS reports and schedules, grievance SLA escalation, chat purge) runs in `python -m app.cli operations-worker`.
+
+| Method | Path | Purpose | Auth / permission | Success |
+|---|---|---|---|---|
+| POST | `/api/v1/cases/{type}/{case_id}/unassign` | Remove assignee with reason; `ASSIGNED` → `UNDER_REVIEW` | `case:assign` | 200 case |
+| POST | `/api/v1/cases/{type}/{case_id}/assign` | Now returns **202** `AssignmentRequestRead` when `ASSIGNMENT_REQUIRES_APPROVAL` and caller is not ADMIN | `case:assign` | 200 case / 202 request |
+| POST | `/api/v1/cases/bulk-assign` | Up to 100 cases; per-case `ASSIGNED` / `REQUESTED` / `FAILED` | `case:assign` | 200 `BulkAssignResult` |
+| GET | `/api/v1/assignment-requests[/{id}]` | Approval queue (supervisors all, requesters own) | `case:assign` | 200 |
+| POST | `/api/v1/assignment-requests/{id}/approve\|reject\|cancel` | Decide / withdraw a request | `assignment:approve` (cancel: requester) | 200 |
+| GET | `/api/v1/public/reference/enums` | Stable codes with English/Hindi labels | None | 200 |
+| GET | `/api/v1/public/reference/item-categories` | Item taxonomy | None | 200 |
+| PUT | `/api/v1/reference/item-categories/{code}` | Create/update category | `reference:manage` | 200 |
+| GET | `/api/v1/cases/{case_id}/duplicates` | Explainable duplicate candidates (never merges) | `case:read` + scope | 200 |
+| GET | `/api/v1/cases` and `/cases/{type}` | New filters `custody_status`, `reported_by_user_id`, `has_contact`, `location_id`, `sector_id`; sorts `±urgency`, `±event_at` | `case:read` | 200 |
+| POST/GET | `/api/v1/public/grievances` | Submit / list own grievances | `X-Verified-Mobile-Token` (purpose `GRIEVANCE`) or PUBLIC bearer | 201 `GrievanceAck` / 200 |
+| GET | `/api/v1/public/grievances/{reference}` | Privacy-safe status and public history | same | 200 |
+| POST | `/api/v1/public/grievances/{reference}/comments\|reopen` | Citizen comment / reopen | same | 200 |
+| GET | `/api/v1/grievances`, `/grievances/summary`, `/grievances/{id}` | Station-scoped queue, aggregates, detail | `grievance:read` | 200 |
+| POST | `/api/v1/grievances/{id}/assign\|status\|comments` | Staff workflow | `grievance:manage` | 200 |
+| GET | `/api/v1/events` | Realtime cursor poll | `case:read` | 200 `EventBatch` |
+| GET | `/api/v1/events/stream` | Server-Sent Events (`Last-Event-ID` resume) | `case:read` | 200 `text/event-stream` |
+| GET | `/api/v1/dashboard/analytics` | Breakdowns, medians, unresolved age, activity | `analytics:read` | 200 `DashboardAnalytics` |
+| POST/GET | `/api/v1/reports/jobs[/{id}]` | Queue / list / read MIS report jobs | `report:generate` | 202 / 200 |
+| GET | `/api/v1/reports/jobs/{id}/download` | Audited CSV download | requester, admin, or schedule recipient | 200 `text/csv` |
+| POST | `/api/v1/reports/jobs/{id}/cancel` | Cancel queued / revoke completed | requester or admin | 200 |
+| POST/GET | `/api/v1/reports/schedules`, `/schedules/{id}/activate\|deactivate` | Daily/weekly schedules | `report:schedule` | 201 / 200 |
+| GET/POST/PATCH | `/api/v1/integrations/destinations[/{id}]` | Allowlisted PA / display / social / government destinations | read `alert:draft`; write `integration:manage` | 200 / 201 |
+| GET | `/api/v1/integrations/destinations/{id}/active-alerts` | Live content reconciliation | `alert:draft` | 200 |
+| POST | `/api/v1/integrations/destinations/{id}/case-exports` | Minimal case summary to a government system (legal basis required) | `integration:export` | 202 `DispatchRead` |
+| GET/POST | `/api/v1/integrations/dispatches`, `/dispatches/{id}/retry` | Delivery status / retry failed | `integration:manage` | 200 |
+| GET/POST | `/api/v1/integrations/inbound`, `/inbound/{id}/review` | Quarantined inbound messages | `integration:inbound_review` | 200 |
+| GET/POST/PATCH | `/api/v1/alerts[/{id}]` | Draft bilingual public alerts | `alert:draft` | 200 / 201 |
+| POST | `/api/v1/alerts/{id}/approve` | Second-person approval; queues dispatch | `alert:approve` | 200 |
+| POST | `/api/v1/alerts/{id}/withdraw` | Withdraw; delivered destinations get a withdrawal | `alert:draft` | 200 |
+| GET | `/api/v1/alerts/{id}/dispatches` | Per-destination delivery | `alert:draft` | 200 |
+| POST | `/api/v1/public/chat/sessions` | Start chatbot session | None | 201 (returns `session_secret` once) |
+| POST/GET | `/api/v1/public/chat/sessions/{id}/messages` | Send message / read transcript | `X-Chat-Session-Secret`; optional `X-Case-Status-Token` | 200 |
+| POST | `/api/v1/public/chat/sessions/{id}/close` | End chat | `X-Chat-Session-Secret` | 204 |
+| GET/POST | `/api/v1/chat/sessions[/{id}]`, `/reply`, `/close` | Staff handoff queue | `chat:handoff` | 200 |
+| POST | `/api/v1/webhooks/msg91/delivery` | MSG91 delivery receipts | `X-Webhook-Token` | 200 |
+| POST | `/api/v1/webhooks/integrations/{code}` | Signed inbound message | `X-Kumbh-Timestamp` + `X-Kumbh-Signature` (HMAC-SHA256) | 202 |
+
 ## 12. Totals
 
 | Module | Operations |
@@ -264,7 +308,8 @@ All routes require staff Bearer authentication and apply normal case scope.
 | Sightings (staff) | 3 |
 | Public information admin | 5 |
 | Devices | 2 |
-| **Total in OpenAPI** | **104 paths / 127 operations** |
+| Operations modules (11d) | 62 |
+| **Total in OpenAPI** | **159 paths / 189 operations** |
 | `/metrics` (outside OpenAPI) | 1 |
 
 Phase 4 adds citizen OTP intake, status access, sightings, lifecycle EMAIL/PUSH outbox adapters (MSG91/SMTP/FCM), public information, PUBLIC self-registration, and restricted case access. Phase 6 adds browser-reachable media links and self-service password reset by email/SMS code. Live SMS/email/push delivery remains deployment-dependent. See [PHASE4_PUBLIC_PORTAL.md](../evidence/PHASE4_PUBLIC_PORTAL.md) and [API_GAP_ANALYSIS.md](./API_GAP_ANALYSIS.md).
@@ -302,6 +347,17 @@ Phase 4 adds citizen OTP intake, status access, sightings, lifecycle EMAIL/PUSH 
 | `retention:manage` | | | ✓ | | Retention, legal holds |
 | `audit:read` | | | ✓ | | Audit log |
 | `public_information:manage` | | | ✓ | | Public information publish/unpublish |
+| `grievance:read` / `grievance:manage` | ✓ | ✓ | ✓ | | Grievance queue and workflow (station scoped) |
+| `chat:handoff` | ✓ | ✓ | ✓ | | Chatbot handoff queue and replies |
+| `analytics:read` | | ✓ | ✓ | | Dashboard analytics |
+| `report:generate` | | ✓ | ✓ | | MIS report jobs |
+| `alert:draft` | | ✓ | ✓ | | Draft/withdraw public alerts, view destinations |
+| `integration:inbound_review` | | ✓ | ✓ | | Review quarantined inbound messages |
+| `assignment:approve` | | | ✓ | | Approve/reject assignment requests |
+| `reference:manage` | | | ✓ | | Item categories |
+| `report:schedule` | | | ✓ | | Report schedules |
+| `alert:approve` | | | ✓ | | Approve public alerts (not own drafts) |
+| `integration:manage` / `integration:export` | | | ✓ | | Destinations, dispatch retry, government case export |
 
 ### Case visibility (row-level scope, `backend/app/auth/scope.py`)
 
