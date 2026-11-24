@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+from app.common.time import utcnow
 from app.database import SessionLocal
 from app.models import (
     AuditEvent,
@@ -17,7 +18,6 @@ from app.models import (
     MissingPersonDetails,
     User,
 )
-from app.common.time import utcnow
 from app.models.enums import CaseStatus, CaseType, MatchDomain, MatchSource, MatchStatus, NoteType, Role
 from app.schemas.cases import MissingPersonCreate
 from app.services import cases as case_service

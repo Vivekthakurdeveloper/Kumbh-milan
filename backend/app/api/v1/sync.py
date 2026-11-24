@@ -3,7 +3,8 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Header, Query, Response, UploadFile, status as http_status
+from fastapi import APIRouter, Depends, File, Header, Query, Response, UploadFile
+from fastapi import status as http_status
 
 from app.api.v1.responses import AUTHED, errors
 from app.auth.dependencies import CurrentPrincipal, DbSession

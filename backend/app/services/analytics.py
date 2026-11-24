@@ -14,7 +14,17 @@ from sqlalchemy.orm import Session
 from app.auth.permissions import Permission, require_permission
 from app.auth.scope import case_visibility_clause
 from app.common.time import utcnow
-from app.models import AuditEvent, Case, CaseAssignment, CaseHandover, CaseMatch, Grievance, Location, Notification, User
+from app.models import (
+    AuditEvent,
+    Case,
+    CaseAssignment,
+    CaseHandover,
+    CaseMatch,
+    Grievance,
+    Location,
+    Notification,
+    User,
+)
 from app.models.enums import CaseStatus, HandoverStatus, MatchStatus, NotificationStatus, Role
 from app.services.dashboard import ACTIVE, resolve_period
 from app.services.realtime import CASE_EVENTS

@@ -70,10 +70,23 @@ def purge_expired(args: argparse.Namespace) -> int:
         resets = db.execute(
             delete(PasswordResetToken).where(PasswordResetToken.expires_at < now - timedelta(days=1))
         ).rowcount
+        from app.config import get_settings
+        from app.models import AssistantAnswer, MfaLoginChallenge
+
+        mfa_challenges = db.execute(
+            delete(MfaLoginChallenge).where(MfaLoginChallenge.expires_at < now - timedelta(days=1))
+        ).rowcount
+        # Kept an hour past the idempotency window so a live key never points at a purged answer.
+        answers = db.execute(
+            delete(AssistantAnswer).where(
+                AssistantAnswer.created_at < now - timedelta(hours=get_settings().idempotency_ttl_hours + 1)
+            )
+        ).rowcount
         db.commit()
     print(
         f"Purged {keys} idempotency keys, {attempts} login attempts, {sessions} expired sessions, "
-        f"{otps} OTP challenges, {resets} password reset codes"
+        f"{otps} OTP challenges, {resets} password reset codes, {mfa_challenges} MFA login challenges, "
+        f"{answers} assistant answers"
     )
     return 0
 
@@ -225,12 +238,11 @@ def maintenance_worker(args: argparse.Namespace) -> int:
     import signal
     import time
 
+    from app.config import get_settings
     from app.observability import configure_logging
     from app.services import attachments as attachment_service
     from app.storage import get_storage
     from app.workers.runtime import beat
-
-    from app.config import get_settings
 
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_format)
@@ -387,6 +399,45 @@ def face_backfill(args: argparse.Namespace) -> int:
     return 0
 
 
+def export_openapi(args: argparse.Namespace) -> int:
+    """Writes the OpenAPI document, or with --check exits 1 if the committed file differs from the code."""
+    import json
+    from pathlib import Path
+
+    from app.main import app
+
+    rendered = json.dumps(app.openapi(), indent=2, ensure_ascii=False) + "\n"
+    path = Path(args.path)
+    if args.check:
+        if not path.exists() or path.read_text(encoding="utf-8") != rendered:
+            print(f"{path} is out of date; run: python -m app.cli export-openapi {args.path}", file=sys.stderr)
+            return 1
+        print(f"{path} matches the code")
+        return 0
+    path.write_text(rendered, encoding="utf-8")
+    print(f"Wrote {path}")
+    return 0
+
+
+def rotate_encryption(args: argparse.Namespace) -> int:
+    """Re-encrypts ciphertext under the current keys. Exit 1 if any row is unreadable with the configured keys."""
+    from app.services import key_rotation
+
+    with SessionLocal() as db:
+        reports = key_rotation.rotate(db, apply=args.apply, batch_size=args.batch_size)
+    verb = "Rotated" if args.apply else "Would rotate"
+    for name, report in reports.items():
+        if report.rotated or report.undecryptable:
+            print(f"{name}: scanned {report.scanned}, {verb.lower()} {report.rotated}, "
+                  f"unreadable {len(report.undecryptable)} {report.undecryptable[:10]}")
+    total = sum(r.rotated for r in reports.values())
+    unreadable = sum(len(r.undecryptable) for r in reports.values())
+    print(f"{verb} {total} values; {unreadable} unreadable")
+    if not args.apply and total:
+        print("Dry run only; re-run with --apply. Remove *_PREVIOUS_KEYS only after a run reports 0 to rotate.")
+    return 1 if unreadable else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -445,6 +496,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--batch-size", type=int, default=50)
     p.add_argument("--interval", type=float, default=10.0)
     p.set_defaults(func=operations_worker)
+
+    p = sub.add_parser("export-openapi", help="Write the OpenAPI document (--check fails if the file is stale)")
+    p.add_argument("path", nargs="?", default="../docs/api/openapi.json")
+    p.add_argument("--check", action="store_true")
+    p.set_defaults(func=export_openapi)
+
+    p = sub.add_parser("rotate-encryption",
+                       help="Re-encrypt stored ciphertext under the current keys (dry run by default; resumable)")
+    p.add_argument("--apply", action="store_true")
+    p.add_argument("--batch-size", type=int, default=500)
+    p.set_defaults(func=rotate_encryption)
 
     p = sub.add_parser("schema-status", help="Compare the database revision with the revision this build expects")
     p.set_defaults(func=schema_status)

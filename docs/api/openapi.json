@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Kumbh Setu Lost & Found API",
-    "description": "\nCase management for missing persons, found persons, lost items, and found items at Haridwar Kumbh Mela 2027.\n\nStaff `/api/v1` endpoints require `Authorization: Bearer <access token>` except login/refresh.\nCitizen `/api/v1/public/*` endpoints are unauthenticated but OTP-gated where required.\nVisibility for staff APIs is scoped by role and station; ids outside your scope return 404.\nErrors use `{\"error\": {\"code\", \"message\", \"request_id\", \"details\"}}`.\n",
+    "description": "\nCase management for missing persons, found persons, lost items, and found items at Haridwar Kumbh Mela 2027.\n\nStaff `/api/v1` endpoints require `Authorization: Bearer <access token>` except login, MFA verify-login, and refresh.\n\nSign-in: `POST /api/v1/auth/login` returns the token pair, or, for accounts with MFA enabled,\n`{\"mfa_required\": true, \"challenge_token\", ...}` and no tokens. Then `POST /api/v1/auth/mfa/verify-login` with the\nchallenge token and the 6-digit authenticator code returns the token pair.\nCitizen `/api/v1/public/*` endpoints are unauthenticated but OTP-gated where required.\nVisibility for staff APIs is scoped by role and station; ids outside your scope return 404.\nErrors use `{\"error\": {\"code\", \"message\", \"request_id\", \"details\"}}`.\n",
     "version": "1.0.0"
   },
   "paths": {
@@ -116,13 +116,103 @@
           "Authentication"
         ],
         "summary": "Login",
-        "description": "Exchange username and password for a 15-minute access token and a rotating refresh token.",
+        "description": "Step 1 of sign-in. Exchange username and password for a 15-minute access token and a rotating refresh token.\n\nWhen the account has MFA enabled, no tokens and no session are issued. The answer is instead\n`{\"mfa_required\": true, \"challenge_token\", \"message\", \"challenge_expires_in\"}`: show the 6-digit code input\nand call POST /auth/mfa/verify-login (step 2) with the challenge token. A wrong password gives the same\n`401 invalid_credentials` whether or not the account exists or uses MFA.",
         "operationId": "login_api_v1_auth_login_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Either the token pair (MFA not enabled) or an MFA challenge (MFA enabled). Tell them apart by `mfa_required`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TokenResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MfaChallengeResponse"
+                    }
+                  ],
+                  "title": "Response Login Api V1 Auth Login Post"
+                },
+                "examples": {
+                  "tokens": {
+                    "summary": "MFA not enabled: signed in",
+                    "value": {
+                      "access_token": "eyJhbGciOiJIUzI1NiIs...",
+                      "refresh_token": "6f1c...e2.Q0xJRU5U...",
+                      "token_type": "bearer",
+                      "expires_in": 900
+                    }
+                  },
+                  "mfa_required": {
+                    "summary": "MFA enabled: step 2 needed",
+                    "value": {
+                      "mfa_required": true,
+                      "challenge_token": "mfa.0b7e...c1.sR3x...",
+                      "message": "MFA verification required.",
+                      "challenge_expires_in": 300
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/mfa/verify-login": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Step 2 of sign-in for MFA accounts: exchange the challenge and a 6-digit code for tokens",
+        "description": "Completes sign-in after POST /auth/login answered `mfa_required: true`. Returns the same token pair as a\nnormal login. No bearer token is needed or accepted here.\n\n- `401 mfa_code_invalid`: wrong code (or a code already used); retry with the next code.\n- `401 mfa_challenge_expired` / `401 mfa_challenge_invalid`: the challenge is expired, already used, or\n  superseded by a newer login; sign in again.\n- `429 mfa_attempts_exceeded`: too many wrong codes for this challenge (default 5); sign in again.\n- `429 account_temporarily_locked`: wrong codes count toward the same lockout as wrong passwords.\n- `429 too_many_requests`: per-IP rate limit, with `Retry-After`.\n\nThe challenge is single-use and lasts `MFA_LOGIN_CHALLENGE_TTL_SECONDS` (default 300).",
+        "operationId": "verify_mfa_login_api_v1_auth_mfa_verify_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaVerifyLoginRequest"
               }
             }
           },
@@ -161,6 +251,16 @@
           },
           "429": {
             "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable or not configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -260,7 +360,7 @@
           "Authentication"
         ],
         "summary": "Enroll Mfa",
-        "description": "Start TOTP enrollment. The secret is returned once. Disabled unless MFA_MODE=totp.",
+        "description": "Start TOTP enrollment (profile screen). The secret is returned once: show it as a QR code /\n`otpauth://totp/...?secret=...&digits=6&period=30` for an authenticator app. Disabled (`409 mfa_disabled`)\nunless MFA_MODE=totp; `409 mfa_already_enabled` once enabled.",
         "operationId": "enroll_mfa_api_v1_auth_mfa_enroll_post",
         "responses": {
           "200": {
@@ -307,7 +407,7 @@
           "Authentication"
         ],
         "summary": "Confirm Mfa",
-        "description": "Enable TOTP after the caller proves the current code. This is not phishing-resistant MFA.",
+        "description": "Enable TOTP after the caller proves the current code (`422 mfa_code_invalid` otherwise). From then on\nPOST /auth/login answers `mfa_required: true` and sign-in needs POST /auth/mfa/verify-login. Every other\nsession of this user is signed out; the calling session stays signed in. This is not phishing-resistant MFA.",
         "operationId": "confirm_mfa_api_v1_auth_mfa_confirm_post",
         "requestBody": {
           "content": {
@@ -4426,6 +4526,150 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/grievances/{reference}/attachments": {
+      "post": {
+        "tags": [
+          "Public grievances"
+        ],
+        "summary": "Attach a photo or voice recording to your grievance",
+        "description": "Same quarantine and malware scanning as case attachments. Re-sending the same file returns the original\n(200). Closed grievances and grievances at GRIEVANCE_MAX_ATTACHMENTS return 409.",
+        "operationId": "citizen_attach_api_v1_public_grievances__reference__attachments_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reference",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Reference"
+            }
+          },
+          {
+            "name": "X-Verified-Mobile-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Verified-Mobile-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_citizen_attach_api_v1_public_grievances__reference__attachments_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrievancePublicAttachment"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Stored in quarantine; scan pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrievancePublicAttachment"
                 }
               }
             }
@@ -16324,6 +16568,333 @@
         }
       }
     },
+    "/api/v1/grievances/{grievance_id}/legal-holds": {
+      "get": {
+        "tags": [
+          "Retention"
+        ],
+        "summary": "List Grievance Holds",
+        "operationId": "list_grievance_holds_api_v1_grievances__grievance_id__legal_holds_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "grievance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Grievance Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LegalHoldRead"
+                  },
+                  "title": "Response List Grievance Holds Api V1 Grievances  Grievance Id  Legal Holds Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Retention"
+        ],
+        "summary": "Place Grievance Hold",
+        "description": "While a hold is active the grievance is never anonymised.",
+        "operationId": "place_grievance_hold_api_v1_grievances__grievance_id__legal_holds_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "grievance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Grievance Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegalHoldCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalHoldRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/grievances/{grievance_id}/legal-holds/{hold_id}/release": {
+      "post": {
+        "tags": [
+          "Retention"
+        ],
+        "summary": "Release Grievance Hold",
+        "operationId": "release_grievance_hold_api_v1_grievances__grievance_id__legal_holds__hold_id__release_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "grievance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Grievance Id"
+            }
+          },
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Hold Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegalHoldRelease"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalHoldRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dashboard/summary": {
       "get": {
         "tags": [
@@ -16644,7 +17215,7 @@
         "tags": [
           "Reports"
         ],
-        "summary": "Queue an MIS report (CSV). Poll the job, then download when COMPLETED.",
+        "summary": "Queue an MIS report (CSV or PDF). Poll the job, then download when COMPLETED.",
         "operationId": "create_job_api_v1_reports_jobs_post",
         "security": [
           {
@@ -18168,6 +18739,252 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GrievanceDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/grievances/{grievance_id}/attachments": {
+      "post": {
+        "tags": [
+          "Grievances"
+        ],
+        "summary": "Attach staff evidence (never shown to the citizen)",
+        "operationId": "staff_attach_api_v1_grievances__grievance_id__attachments_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "grievance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Grievance Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_staff_attach_api_v1_grievances__grievance_id__attachments_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrievanceAttachmentRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or outside your authorised scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Stored in quarantine; scan pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrievanceAttachmentRead"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/grievances/{grievance_id}/attachments/{attachment_id}": {
+      "get": {
+        "tags": [
+          "Grievances"
+        ],
+        "summary": "Short-lived download URL for a scanned grievance attachment (access is audited)",
+        "operationId": "staff_download_api_v1_grievances__grievance_id__attachments__attachment_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "grievance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Grievance Id"
+            }
+          },
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Attachment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentDownload"
                 }
               }
             }
@@ -20427,6 +21244,123 @@
         }
       }
     },
+    "/api/v1/assistant/ask": {
+      "post": {
+        "tags": [
+          "Help assistant"
+        ],
+        "summary": "Ask the help assistant how to use Kumbh Milan",
+        "description": "Staff only (`assistant:use`: help desk operators, police officers, administrators); PUBLIC accounts get 403.\nAnswers how-to questions about the application in English (`en`, default) or Hindi (`hi`).\n\nThe assistant answers only from reviewed help content. It cannot look up cases, people, or contact details,\nand when the content does not cover a question it says it cannot confirm and points to an administrator or\nhelp desk supervisor (`sources: []`).\n\n- `422 validation_failed`: missing, empty, or whitespace-only `question`; more than 1000 characters;\n  `locale` other than `en`/`hi`; malformed `Idempotency-Key`.\n- `409 idempotency_key_reused`: the key was already used for a different question.\n- `429 too_many_requests`: per-user limit (`RATE_LIMIT_ASSISTANT_PER_MINUTE`, default 20), with `Retry-After`.\n- `503 assistant_unavailable`: the assistant is switched off or its language model is unreachable.\n\nA replay of an earlier answer has the `Idempotent-Replayed: true` header.",
+        "operationId": "ask_api_v1_assistant_ask_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional client key (8-128 chars). A retry with the same key and question replays the answer",
+              "title": "Idempotency-Key"
+            },
+            "description": "Optional client key (8-128 chars). A retry with the same key and question replays the answer"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantAskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantAnswerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited or temporarily locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable or not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/webhooks/msg91/delivery": {
       "post": {
         "tags": [
@@ -20470,6 +21404,85 @@
                 "schema": {
                   "type": "object",
                   "title": "Response Msg91 Delivery Api V1 Webhooks Msg91 Delivery Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable or not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/whatsapp/inbound": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Inbound WhatsApp message to the chatbot; the gateway sends the returned reply",
+        "operationId": "whatsapp_inbound_api_v1_webhooks_whatsapp_inbound_post",
+        "parameters": [
+          {
+            "name": "X-Webhook-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Webhook-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WhatsAppInbound"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhatsAppReply"
                 }
               }
             }
@@ -21262,6 +22275,68 @@
         ],
         "title": "AssignmentRequestStatus"
       },
+      "AssistantAnswerResponse": {
+        "properties": {
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "locale": {
+            "type": "string",
+            "enum": [
+              "en",
+              "hi"
+            ],
+            "title": "Locale",
+            "description": "Language the answer is written in"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources",
+            "description": "Titles of the help articles the answer is based on; [] when none"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "answer",
+          "locale"
+        ],
+        "title": "AssistantAnswerResponse"
+      },
+      "AssistantAskRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Question",
+            "description": "Trimmed first; empty or whitespace-only is rejected (422)",
+            "examples": [
+              "How do I register a missing person?"
+            ]
+          },
+          "locale": {
+            "type": "string",
+            "enum": [
+              "en",
+              "hi"
+            ],
+            "title": "Locale",
+            "description": "Language of the answer",
+            "default": "en"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "AssistantAskRequest"
+      },
       "AttachmentDeleteRequest": {
         "properties": {
           "reason": {
@@ -21791,6 +22866,42 @@
           "created_at"
         ],
         "title": "AuditEventRead"
+      },
+      "Body_citizen_attach_api_v1_public_grievances__reference__attachments_post": {
+        "properties": {
+          "media_type": {
+            "$ref": "#/components/schemas/MediaType"
+          },
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "media_type",
+          "file"
+        ],
+        "title": "Body_citizen_attach_api_v1_public_grievances__reference__attachments_post"
+      },
+      "Body_staff_attach_api_v1_grievances__grievance_id__attachments_post": {
+        "properties": {
+          "media_type": {
+            "$ref": "#/components/schemas/MediaType"
+          },
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "media_type",
+          "file"
+        ],
+        "title": "Body_staff_attach_api_v1_grievances__grievance_id__attachments_post"
       },
       "Body_submit_found_item_api_v1_public_found_items_post": {
         "properties": {
@@ -25778,6 +26889,98 @@
         ],
         "title": "GrievanceAssign"
       },
+      "GrievanceAttachmentRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "media_type": {
+            "$ref": "#/components/schemas/MediaType"
+          },
+          "file_size_bytes": {
+            "type": "integer",
+            "title": "File Size Bytes"
+          },
+          "scan_status": {
+            "$ref": "#/components/schemas/ScanStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "original_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Filename"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type"
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "title": "Checksum Sha256"
+          },
+          "uploaded_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uploaded By User Id"
+          },
+          "by_citizen": {
+            "type": "boolean",
+            "title": "By Citizen"
+          },
+          "scanned_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scanned At"
+          },
+          "downloadable": {
+            "type": "boolean",
+            "title": "Downloadable",
+            "description": "True once the file passed malware scanning",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "media_type",
+          "file_size_bytes",
+          "scan_status",
+          "created_at",
+          "original_filename",
+          "content_type",
+          "checksum_sha256",
+          "uploaded_by_user_id",
+          "by_citizen",
+          "scanned_at"
+        ],
+        "title": "GrievanceAttachmentRead"
+      },
       "GrievanceCategory": {
         "type": "string",
         "enum": [
@@ -26012,12 +27215,35 @@
             ],
             "title": "Resolution"
           },
+          "anonymized_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anonymized At"
+          },
+          "legal_hold_active": {
+            "type": "boolean",
+            "title": "Legal Hold Active"
+          },
           "events": {
             "items": {
               "$ref": "#/components/schemas/GrievanceEventRead"
             },
             "type": "array",
             "title": "Events"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/GrievanceAttachmentRead"
+            },
+            "type": "array",
+            "title": "Attachments"
           }
         },
         "type": "object",
@@ -26043,7 +27269,10 @@
           "version",
           "description",
           "resolution",
-          "events"
+          "anonymized_at",
+          "legal_hold_active",
+          "events",
+          "attachments"
         ],
         "title": "GrievanceDetail"
       },
@@ -26152,6 +27381,40 @@
         ],
         "title": "GrievanceEventRead"
       },
+      "GrievancePublicAttachment": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "media_type": {
+            "$ref": "#/components/schemas/MediaType"
+          },
+          "file_size_bytes": {
+            "type": "integer",
+            "title": "File Size Bytes"
+          },
+          "scan_status": {
+            "$ref": "#/components/schemas/ScanStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "media_type",
+          "file_size_bytes",
+          "scan_status",
+          "created_at"
+        ],
+        "title": "GrievancePublicAttachment",
+        "description": "A file the citizen uploaded. Staff evidence is never listed to the citizen."
+      },
       "GrievancePublicEvent": {
         "properties": {
           "kind": {
@@ -26242,6 +27505,14 @@
             },
             "type": "array",
             "title": "Events",
+            "default": []
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/GrievancePublicAttachment"
+            },
+            "type": "array",
+            "title": "Attachments",
             "default": []
           }
         },
@@ -27499,9 +28770,28 @@
             "title": "Id"
           },
           "case_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Case Id"
+          },
+          "grievance_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grievance Id"
           },
           "reason": {
             "type": "string",
@@ -29980,6 +31270,12 @@
             },
             "type": "array",
             "title": "Permissions"
+          },
+          "mfa_enabled": {
+            "type": "boolean",
+            "title": "Mfa Enabled",
+            "description": "True when sign-in requires an authenticator code",
+            "default": false
           }
         },
         "type": "object",
@@ -30069,6 +31365,39 @@
         ],
         "title": "MedianDurations"
       },
+      "MfaChallengeResponse": {
+        "properties": {
+          "mfa_required": {
+            "type": "boolean",
+            "const": true,
+            "title": "Mfa Required",
+            "default": true
+          },
+          "challenge_token": {
+            "type": "string",
+            "title": "Challenge Token",
+            "description": "Opaque, single-use, short-lived. Only accepted by POST /auth/mfa/verify-login; never a bearer token"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": "MFA verification required."
+          },
+          "challenge_expires_in": {
+            "type": "integer",
+            "title": "Challenge Expires In",
+            "description": "Seconds until the challenge expires"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "challenge_token",
+          "challenge_expires_in"
+        ],
+        "title": "MfaChallengeResponse",
+        "description": "Login answer when the account has MFA enabled. No access or refresh token is issued yet."
+      },
       "MfaConfirmRequest": {
         "properties": {
           "code": {
@@ -30109,6 +31438,29 @@
           "secret"
         ],
         "title": "MfaEnrollResponse"
+      },
+      "MfaVerifyLoginRequest": {
+        "properties": {
+          "challenge_token": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Challenge Token"
+          },
+          "mfa_code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$",
+            "title": "Mfa Code",
+            "description": "Current 6-digit code from the authenticator app"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "challenge_token",
+          "mfa_code"
+        ],
+        "title": "MfaVerifyLoginRequest"
       },
       "MissingPersonCaseRead": {
         "properties": {
@@ -33100,6 +34452,14 @@
         ],
         "title": "ReportCadence"
       },
+      "ReportFormat": {
+        "type": "string",
+        "enum": [
+          "CSV",
+          "PDF"
+        ],
+        "title": "ReportFormat"
+      },
       "ReportJobCreate": {
         "properties": {
           "report_type": {
@@ -33127,6 +34487,10 @@
             ],
             "title": "Station Id",
             "description": "Administrators may narrow to one station"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ReportFormat",
+            "default": "CSV"
           }
         },
         "additionalProperties": false,
@@ -33147,6 +34511,9 @@
           },
           "report_type": {
             "$ref": "#/components/schemas/ReportType"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ReportFormat"
           },
           "status": {
             "$ref": "#/components/schemas/ReportJobStatus"
@@ -33257,6 +34624,7 @@
         "required": [
           "id",
           "report_type",
+          "format",
           "status",
           "period_from",
           "period_to",
@@ -33312,6 +34680,10 @@
             "type": "array",
             "maxItems": 50,
             "title": "Recipient User Ids"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ReportFormat",
+            "default": "CSV"
           }
         },
         "additionalProperties": false,
@@ -33334,6 +34706,9 @@
           },
           "cadence": {
             "$ref": "#/components/schemas/ReportCadence"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ReportFormat"
           },
           "station_id": {
             "anyOf": [
@@ -33380,6 +34755,7 @@
           "id",
           "report_type",
           "cadence",
+          "format",
           "station_id",
           "recipient_user_ids",
           "next_run_at",
@@ -33474,7 +34850,8 @@
         "enum": [
           "ARCHIVE_CLOSED_CASES",
           "ANONYMIZE_ARCHIVED_CASES",
-          "PURGE_ATTACHMENT_OBJECTS"
+          "PURGE_ATTACHMENT_OBJECTS",
+          "ANONYMIZE_CLOSED_GRIEVANCES"
         ],
         "title": "RetentionPolicy"
       },
@@ -35360,6 +36737,70 @@
           "purpose"
         ],
         "title": "VerifiedMobileResponse"
+      },
+      "WhatsAppInbound": {
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Message Id"
+          },
+          "from": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 6,
+            "title": "From"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_id",
+          "from",
+          "text"
+        ],
+        "title": "WhatsAppInbound",
+        "description": "Normalised inbound message; the gateway adapter maps its provider's payload onto this shape."
+      },
+      "WhatsAppReply": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "reply": {
+            "type": "string",
+            "title": "Reply"
+          },
+          "intent": {
+            "type": "string",
+            "title": "Intent"
+          },
+          "handoff": {
+            "type": "boolean",
+            "title": "Handoff"
+          },
+          "duplicate": {
+            "type": "boolean",
+            "title": "Duplicate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "reply",
+          "intent",
+          "handoff",
+          "duplicate"
+        ],
+        "title": "WhatsAppReply"
       }
     },
     "securitySchemes": {

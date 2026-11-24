@@ -138,11 +138,16 @@ class CaseAttachment(CreatedAtMixin, Base):
             name="ck_case_attachments_client_record_requires_device",
         ),
         CheckConstraint(
-            "(case_id IS NOT NULL AND sighting_id IS NULL) OR (case_id IS NULL AND sighting_id IS NOT NULL)",
+            "num_nonnulls(case_id, sighting_id, grievance_id) = 1",
             name="ck_case_attachments_exclusive_parent",
         ),
         Index("ix_case_attachments_case_created", "case_id", "created_at"),
         Index("ix_case_attachments_sighting_created", "sighting_id", "created_at"),
+        Index("ix_case_attachments_grievance_created", "grievance_id", "created_at"),
+        Index(
+            "uq_case_attachments_grievance_checksum", "grievance_id", "checksum_sha256", unique=True,
+            postgresql_where=text("grievance_id IS NOT NULL AND deleted_at IS NULL"),
+        ),
         Index(
             "ix_case_attachments_scan_queue", "next_scan_at",
             postgresql_where=text("scan_status IN ('QUARANTINED', 'SCANNING')"),
@@ -164,6 +169,10 @@ class CaseAttachment(CreatedAtMixin, Base):
     sighting_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("public_sightings.id", ondelete="RESTRICT"), nullable=True
     )
+    grievance_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("grievances.id", ondelete="RESTRICT"), nullable=True
+    )
+    by_citizen: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
     uploaded_by_user_id: Mapped[uuid.UUID | None] = _user_fk(nullable=True)
     media_type: Mapped[MediaType] = mapped_column(enum_type(MediaType, "media_type"), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)

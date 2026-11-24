@@ -20,7 +20,7 @@ from app.auth.permissions import Permission, has_permission, require_permission
 from app.auth.scope import case_visibility_clause
 from app.common.errors import Unauthenticated, ValidationFailed
 from app.common.time import utcnow
-from app.models import AuditEvent, Case, Grievance, RefreshToken, User
+from app.models import AuditEvent, Case, Grievance, RefreshToken, StaffNotification, User
 from app.models.enums import Role
 
 CASE_EVENTS = {
@@ -56,8 +56,10 @@ GRIEVANCE_EVENTS = {
     AuditAction.GRIEVANCE_STATUS_CHANGED: "grievance.status_changed",
     AuditAction.GRIEVANCE_COMMENTED: "grievance.commented",
     AuditAction.GRIEVANCE_ESCALATED: "grievance.escalated",
+    AuditAction.GRIEVANCE_ATTACHMENT_ADDED: "grievance.attachment_added",
 }
-EVENT_TYPES = {**CASE_EVENTS, **GRIEVANCE_EVENTS}
+NOTIFICATION_EVENTS = {AuditAction.STAFF_NOTIFICATION_CREATED: "staff_notification.created"}
+EVENT_TYPES = {**CASE_EVENTS, **GRIEVANCE_EVENTS, **NOTIFICATION_EVENTS}
 MAX_BATCH = 200
 
 
@@ -102,7 +104,11 @@ def fetch(db: Session, user: User, cursor: str, *, lag_seconds: float, limit: in
     after_at, after_id = decode_cursor(cursor)
     horizon = utcnow() - timedelta(seconds=lag_seconds)
     visible_cases = select(Case.id).where(case_visibility_clause(user))
-    visibility = [and_(AuditEvent.action.in_(list(CASE_EVENTS)), AuditEvent.case_id.in_(visible_cases))]
+    own_notifications = select(StaffNotification.id).where(StaffNotification.recipient_user_id == user.id)
+    visibility = [
+        and_(AuditEvent.action.in_(list(CASE_EVENTS)), AuditEvent.case_id.in_(visible_cases)),
+        and_(AuditEvent.action.in_(list(NOTIFICATION_EVENTS)), AuditEvent.entity_id.in_(own_notifications)),
+    ]
     if has_permission(user, Permission.GRIEVANCE_READ):
         grievance_scope = select(Grievance.id)
         if Role(user.role) is not Role.ADMIN:

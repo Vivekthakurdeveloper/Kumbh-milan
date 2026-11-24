@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = 15
 
     contact_encryption_key: str = ""
+    contact_encryption_previous_keys: list[str] = Field(
+        default_factory=list,
+        description="JSON list of retired Fernet keys still accepted for decryption until rotate-encryption finishes",
+    )
     public_security_secret: str = Field(
         "",
         description="HMAC/JWT secret for citizen OTP and case-scoped tokens; falls back to JWT_SECRET in local/test only",
@@ -127,6 +131,9 @@ class Settings(BaseSettings):
     face_embedding_encryption_key: str = Field(
         "", description="Fernet key for facial embeddings; separate from contact encryption"
     )
+    face_embedding_encryption_previous_keys: list[str] = Field(
+        default_factory=list, description="Retired face-embedding keys accepted for decryption during a rotation"
+    )
     face_embedding_retention_days: int = Field(
         30, description="Operational default: delete embeddings for inactive cases after this many days"
     )
@@ -134,6 +141,9 @@ class Settings(BaseSettings):
     retention_archive_after_days: int = 90
     retention_anonymize_after_days: int = 365
     retention_attachment_purge_after_days: int = 30
+    retention_grievance_anonymize_after_days: int = Field(
+        365, description="Code default, not a legally approved period: anonymise grievances this long after closure"
+    )
     retention_max_items_per_run: int = 5000
     retention_database_url: str | None = Field(
         None, description="Owner connection for executing anonymisation runs (retention task only, never the API)"
@@ -164,6 +174,7 @@ class Settings(BaseSettings):
     )
     grievance_sla_hours: int = Field(72, ge=1, le=720)
     grievance_max_escalation_level: int = Field(2, ge=1, le=5)
+    grievance_max_attachments: int = Field(5, ge=1, le=20)
     report_max_rows: int = Field(50_000, ge=100, le=500_000)
     report_max_period_days: int = Field(92, ge=1, le=366)
     report_artifact_ttl_hours: int = Field(72, ge=1, le=720)
@@ -194,6 +205,9 @@ class Settings(BaseSettings):
     chat_supported_locales: list[str] = Field(
         default_factory=lambda: ["en", "hi", "bn", "mr", "gu", "ta", "te", "kn", "ml", "pa", "or", "ur"],
         description="Locales the chatbot accepts. Deterministic replies exist for en/hi; others need the LLM.",
+    )
+    whatsapp_webhook_secret: str | None = Field(
+        None, description="Shared secret the WhatsApp gateway sends in X-Webhook-Token; never log this value"
     )
 
     smtp_enabled: bool = False
@@ -263,6 +277,8 @@ class Settings(BaseSettings):
     rate_limit_public_submit_per_minute: int = 20
     rate_limit_public_status_per_minute: int = 30
     rate_limit_public_chat_per_minute: int = 30
+    rate_limit_mfa_verify_per_minute: int = 30
+    rate_limit_assistant_per_minute: int = 20
     workers_required: bool = Field(
         False,
         description="When true, readiness fails unless scan, notification, cleanup, and retention workers have fresh heartbeats.",
@@ -283,6 +299,27 @@ class Settings(BaseSettings):
         "disabled",
         description="totp is an optional step-up factor. It is not phishing-resistant and is not a production approval.",
     )
+    mfa_login_challenge_ttl_seconds: int = Field(
+        300, ge=60, le=900, description="How long the challenge from an MFA-required login stays valid"
+    )
+    mfa_login_max_attempts: int = Field(
+        5, ge=1, le=10, description="Wrong authenticator codes before a login challenge is burned"
+    )
+
+    assistant_provider: Literal["disabled", "faq", "llm"] = Field(
+        "faq",
+        description=(
+            "Staff help assistant. faq answers from the built-in knowledge base. llm phrases answers with an "
+            "OpenAI-compatible model grounded only on that knowledge base. disabled returns 503."
+        ),
+    )
+    assistant_llm_base_url: str | None = Field(None, description="Falls back to CHAT_LLM_BASE_URL")
+    assistant_llm_model: str | None = Field(None, description="Falls back to CHAT_LLM_MODEL")
+    assistant_llm_api_key: str | None = Field(None, description="Falls back to CHAT_LLM_API_KEY; never log this value")
+    assistant_llm_timeout_seconds: float = Field(15.0, gt=0, le=60)
+    assistant_llm_fallback_to_faq: bool = Field(
+        True, description="Answer from the knowledge base when the model fails, instead of returning 503"
+    )
 
     @property
     def media_mode(self) -> Literal["presigned", "proxy"]:
@@ -292,6 +329,24 @@ class Settings(BaseSettings):
             return "presigned"
         return "proxy"
 
+    def _validate_keyrings(self) -> None:
+        from cryptography.fernet import Fernet
+
+        for name, primary, previous in (
+            ("CONTACT_ENCRYPTION", self.contact_encryption_key, self.contact_encryption_previous_keys),
+            ("FACE_EMBEDDING_ENCRYPTION", self.face_embedding_encryption_key,
+             self.face_embedding_encryption_previous_keys),
+        ):
+            if previous and not primary:
+                raise ValueError(f"{name}_PREVIOUS_KEYS requires {name}_KEY")
+            if primary in previous:
+                raise ValueError(f"{name}_PREVIOUS_KEYS must not contain the current key")
+            for key in previous:
+                try:
+                    Fernet(key.encode())
+                except ValueError as exc:
+                    raise ValueError(f"{name}_PREVIOUS_KEYS contains an invalid Fernet key") from exc
+
     @model_validator(mode="after")
     def _validate_production_secrets(self) -> "Settings":
         if self.email_provider == "smtp" and not self.smtp_host:
@@ -300,6 +355,7 @@ class Settings(BaseSettings):
             self.scan_mode = "clamav" if self.clamav_host else "disabled"
         if self.scan_mode == "clamav" and not self.clamav_host:
             raise ValueError("SCAN_MODE=clamav requires CLAMAV_HOST")
+        self._validate_keyrings()
         if self.app_env in ("staging", "production"):
             if self.notification_provider in ("console", "mock"):
                 raise ValueError("NOTIFICATION_PROVIDER=console/mock is local/test only")
@@ -311,6 +367,11 @@ class Settings(BaseSettings):
                 raise ValueError("CHAT_LLM_PROVIDER=mock is local/test only")
             if self.chat_llm_provider == "openai_compatible" and not (self.chat_llm_base_url and self.chat_llm_model):
                 raise ValueError("CHAT_LLM_PROVIDER=openai_compatible requires CHAT_LLM_BASE_URL and CHAT_LLM_MODEL")
+            if self.assistant_provider == "llm" and not (
+                (self.assistant_llm_base_url or self.chat_llm_base_url)
+                and (self.assistant_llm_model or self.chat_llm_model)
+            ):
+                raise ValueError("ASSISTANT_PROVIDER=llm requires ASSISTANT_LLM_BASE_URL and ASSISTANT_LLM_MODEL")
             if self.smtp_enabled and (not self.smtp_host or not self.smtp_from_email):
                 raise ValueError("SMTP_ENABLED requires SMTP_HOST and SMTP_FROM_EMAIL")
             if self.fcm_enabled and not (self.fcm_credentials_json or self.fcm_credentials_file):

@@ -29,6 +29,7 @@ from app.models.enums import (
     NotificationTemplate,
     Role,
 )
+from app.observability.metrics import STATUS_TRANSITIONS, count_after_commit
 from app.repositories import cases as case_repo
 from app.schemas.workflow import (
     AssignmentRead,
@@ -46,7 +47,6 @@ from app.schemas.workflow import (
     StatusChangeRequest,
     StatusHistoryRead,
 )
-from app.observability.metrics import STATUS_TRANSITIONS, count_after_commit
 from app.services.access import load_case
 from app.services.case_types import CaseTypeSpec
 from app.services.cases import to_summary

@@ -428,6 +428,9 @@ def notify_reviewers(db: Session, match: CaseMatch, left: Case, right: Case) -> 
             .returning(StaffNotification.id)
         ).scalar()
         if result is not None:
+            from app.services.staff_notifications import record_created
+
+            record_created(db, result, StaffNotificationKind.MATCH_CANDIDATE)
             created += 1
     return created
 

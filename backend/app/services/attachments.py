@@ -31,7 +31,7 @@ from app.observability.metrics import SCAN_OUTCOMES
 from app.services.access import load_case
 from app.storage import ObjectStorage
 from app.storage.scanner import MalwareScanner, ScannerUnavailable, ScanOutcome
-from app.storage.validation import declared_type_conflicts, detect_media, safe_display_filename
+from app.storage.validation import DetectedMedia, declared_type_conflicts, detect_media, safe_display_filename
 
 logger = logging.getLogger("kumbh_setu.attachments")
 
@@ -51,6 +51,35 @@ def final_key(case_id: uuid.UUID, attachment_id: uuid.UUID) -> str:
 
 def sighting_final_key(sighting_id: uuid.UUID, attachment_id: uuid.UUID) -> str:
     return f"sightings/{sighting_id}/{attachment_id.hex}"
+
+
+def grievance_quarantine_key(grievance_id: uuid.UUID, attachment_id: uuid.UUID) -> str:
+    return f"quarantine/grievances/{grievance_id}/{attachment_id.hex}"
+
+
+def grievance_final_key(grievance_id: uuid.UUID, attachment_id: uuid.UUID) -> str:
+    return f"grievances/{grievance_id}/{attachment_id.hex}"
+
+
+def read_validated(stream: BinaryIO, media_type: MediaType, declared_content_type: str | None) -> tuple[bytes, DetectedMedia]:
+    """Reads at most the size limit and checks the file signature against the declared media and content type."""
+    limit = _max_bytes(media_type)
+    data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise PayloadTooLarge(f"{media_type.title()} files are limited to {limit // (1024 * 1024)} MB")
+    if not data:
+        raise ValidationFailed("File is empty", code="empty_file")
+    detected = detect_media(data[:64])
+    if detected is None:
+        raise UnsupportedMedia("Unsupported or unrecognised file format", code="unsupported_media_type")
+    if detected.media_type is not media_type:
+        raise UnsupportedMedia(
+            f"File content is {detected.media_type.lower()}, but {media_type.lower()} was declared",
+            code="media_type_mismatch",
+        )
+    if declared_type_conflicts(declared_content_type, detected):
+        raise UnsupportedMedia("Declared content type does not match the file content", code="content_type_mismatch")
+    return data, detected
 
 
 def is_downloadable(attachment: CaseAttachment) -> bool:
@@ -303,6 +332,8 @@ def _promote(
     source = attachment.storage_key
     if attachment.case_id is not None:
         dest = final_key(attachment.case_id, attachment.id)
+    elif attachment.grievance_id is not None:
+        dest = grievance_final_key(attachment.grievance_id, attachment.id)
     else:
         dest = sighting_final_key(attachment.sighting_id, attachment.id)
     try:

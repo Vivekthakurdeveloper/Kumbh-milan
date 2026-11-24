@@ -20,7 +20,17 @@ For a managed database, restore a snapshot or dump into a new instance, run `pyt
 
 ## Retention
 
-Plan and approve runs through the API. Two different administrators are required. Execution of anonymisation in staging or production stays on `python -m app.cli retention-execute` with `RETENTION_DATABASE_URL`. A legal hold removes the case from the plan. Dry-run planning does not change cases.
+Plan and approve runs through the API. Two different administrators are required. Execution of anonymisation in staging or production stays on `python -m app.cli retention-execute` with `RETENTION_DATABASE_URL`. A legal hold removes the case or grievance from the plan. Dry-run planning does not change cases. `ANONYMIZE_CLOSED_GRIEVANCES` follows the same rule: it cannot be executed through the API in staging or production.
+
+## Encryption key rotation
+
+1. Rehearse on a restored copy first.
+2. Generate a new Fernet key. Set it as `CONTACT_ENCRYPTION_KEY` (or `FACE_EMBEDDING_ENCRYPTION_KEY`) and move the old key into `CONTACT_ENCRYPTION_PREVIOUS_KEYS` (JSON list). Restart the API and every worker so all processes read both keys.
+3. Run `python -m app.cli rotate-encryption` (dry run) and keep the counts. Then run `python -m app.cli rotate-encryption --apply`. It commits per batch, so it is safe to stop and re-run.
+4. Re-run the dry run. It must report `0 values; 0 unreadable` before you remove the old key from `*_PREVIOUS_KEYS` and restart again.
+5. If any rows are reported unreadable (exit code 1), do not remove any key. The ids are printed; the key that wrote them is missing from configuration.
+
+Keys never go into the database, logs, or audit events. The audit event records counts per column only.
 
 ## Incident response
 

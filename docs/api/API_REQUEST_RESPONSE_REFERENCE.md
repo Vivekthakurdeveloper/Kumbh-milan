@@ -14,7 +14,7 @@ All application endpoints are under `/api/v1`. Example local base: `http://local
 
 | Header | Direction | When | Notes |
 |---|---|---|---|
-| `Authorization: Bearer <access_token>` | request | Every `/api/v1` call except `auth/login` and `auth/refresh` | |
+| `Authorization: Bearer <access_token>` | request | Every `/api/v1` call except `auth/login`, `auth/mfa/verify-login`, and `auth/refresh` | |
 | `Content-Type: application/json` | request | JSON bodies | Uploads use `multipart/form-data`. |
 | `Idempotency-Key: <8–128 chars>` | request | Optional on: case create, assign, status, custody, add note, match review, queue notification | Retrying with the same key and same body returns the original result with `Idempotent-Replayed: true`. Same key with a different body → `409 idempotency_key_reused`. Keys are per user and expire after 24 h (`IDEMPOTENCY_TTL_HOURS`). Not supported on PATCH, upload, propose match, or revoke. |
 | `X-Request-ID: <8–64 chars [A-Za-z0-9._-]>` | request (optional) / response | Always returned | Echoed when valid, otherwise generated. Show it in error toasts for support. |
@@ -186,16 +186,61 @@ A case id outside the caller's scope, or of a different type than the URL's `{ty
 
 `expires_in` is the access-token lifetime in seconds (`ACCESS_TOKEN_TTL_MINUTES`, default 15). The refresh token is opaque; do not parse it. Refresh sessions last `REFRESH_TOKEN_TTL_DAYS` (default 7).
 
+**Success 200 when the account has MFA enabled** — `MfaChallengeResponse`. No access token, no refresh token, and no session are created yet:
+
+<!-- validate: app.schemas.auth:MfaChallengeResponse -->
+```json
+{
+  "mfa_required": true,
+  "challenge_token": "mfa.5b0c2f8e-1a7d-4c3e-9b6a-0d2e4f6a8c10.SAMPLE-opaque-secret",
+  "message": "MFA verification required.",
+  "challenge_expires_in": 300
+}
+```
+
+Tell the two 200 bodies apart by `mfa_required` (present and `true` only on the challenge). Show the 6-digit code input and call `POST /auth/mfa/verify-login`. The challenge token is not a bearer token: every protected endpoint rejects it with `401`.
+
 **Errors:**
 
 | HTTP | `code` | Cause |
 |---|---|---|
-| 401 | `invalid_credentials` | Unknown user, wrong password, or deactivated account (indistinguishable by design). |
+| 401 | `invalid_credentials` | Unknown user, wrong password, or deactivated account (indistinguishable by design, with or without MFA). |
 | 422 | `validation_failed` | Missing/empty fields or extra fields. |
-| 429 | `account_temporarily_locked` | Too many recent failures for this username. |
+| 429 | `account_temporarily_locked` | Too many recent failures for this username (wrong passwords and wrong MFA codes both count). |
 | 429 | `too_many_requests` | IP rate limit. `details.policy = "login"`, `Retry-After` header. |
 
 **Frontend notes:** show one generic "Invalid username or password" message for 401. For 429 show the lockout message and disable the button for `Retry-After` seconds when present. **Implementation status:** Implemented — tested (`app/api/v1/auth.py:login`, `app/auth/service.py:login`).
+
+### Endpoint: MFA sign-in, step 2 — `POST /api/v1/auth/mfa/verify-login`
+
+**Purpose:** finish sign-in for an account with MFA enabled. **Auth:** none (the challenge token from `POST /auth/login` is the credential). **Rate limit:** 30/min per client IP (`RATE_LIMIT_MFA_VERIFY_PER_MINUTE`), fail-closed.
+
+<!-- validate: app.schemas.auth:MfaVerifyLoginRequest -->
+```json
+{"challenge_token": "mfa.5b0c2f8e-1a7d-4c3e-9b6a-0d2e4f6a8c10.SAMPLE-opaque-secret", "mfa_code": "123456"}
+```
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `challenge_token` | string | yes | 1–256 chars, exactly as returned by login. |
+| `mfa_code` | string | yes | Exactly 6 digits (`^[0-9]{6}$`), the current code from the authenticator app. |
+
+**Success 200** — the same `TokenResponse` as a normal login (`access_token`, `refresh_token`, `token_type`, `expires_in`). Refresh and logout then behave exactly as for any other session.
+
+**Errors:**
+
+| HTTP | `code` | Cause | UI |
+|---|---|---|---|
+| 401 | `mfa_code_invalid` | Wrong code, or a code already used for an earlier sign-in. The challenge stays valid. | "Incorrect code", let the user retry |
+| 401 | `mfa_challenge_expired` | Older than `MFA_LOGIN_CHALLENGE_TTL_SECONDS` (300). | Back to the password step |
+| 401 | `mfa_challenge_invalid` | Unknown, tampered, already used, superseded by a newer login, or invalidated (password changed, account deactivated). | Back to the password step |
+| 422 | `validation_failed` | Missing field, or `mfa_code` not exactly 6 digits. | Field error |
+| 429 | `mfa_attempts_exceeded` | `MFA_LOGIN_MAX_ATTEMPTS` (5) wrong codes on this challenge; it is burned. | Back to the password step |
+| 429 | `account_temporarily_locked` | Wrong codes count toward the login lockout. | Lockout message |
+| 429 | `too_many_requests` | IP rate limit, `Retry-After`. | Wait |
+| 503 | `mfa_unavailable` | The stored secret cannot be read (server configuration). | "Contact an administrator" |
+
+The challenge is single-use: the row is locked while verifying, so concurrent requests cannot both succeed. Each code's 30-second time step is remembered and never accepted twice. Only the SHA-256 of the challenge token is stored; codes, secrets, and tokens are never logged or audited. **Status:** Implemented — tested (`tests/test_mfa_login.py`).
 
 ### Endpoint: Refresh — `POST /api/v1/auth/refresh`
 
@@ -243,12 +288,13 @@ A case id outside the caller's scope, or of a different type than the URL's `{ty
   "created_at": "2026-10-20T06:00:00Z",
   "updated_at": "2026-10-29T03:45:12.104512Z",
   "permissions": [
-    "attachment:delete", "attachment:download", "attachment:upload",
+    "assistant:use", "attachment:delete", "attachment:download", "attachment:upload",
     "case:assign", "case:contact_read", "case:create", "case:custody_update", "case:read",
     "case:resolve", "case:review", "case:search_all_stations", "case:update",
     "match:propose", "match:review", "note:create", "note:sensitive",
     "notification:send", "user:list_assignable"
-  ]
+  ],
+  "mfa_enabled": false
 }
 ```
 
@@ -277,7 +323,7 @@ A newly registered PUBLIC account returns its saved registration values in the s
 }
 ```
 
-`permissions` is sorted alphabetically. **Errors:** `401` (`unauthenticated`, `token_expired`, `invalid_token`, `session_revoked`). **Status:** Implemented — tested.
+`permissions` is sorted alphabetically. `mfa_enabled` is `true` when sign-in requires an authenticator code. **Errors:** `401` (`unauthenticated`, `token_expired`, `invalid_token`, `session_revoked`). **Status:** Implemented — tested.
 
 ### Endpoint: Change own password — `POST /api/v1/auth/change-password`
 
@@ -336,7 +382,9 @@ Codes expire after `PASSWORD_RESET_TTL_MINUTES` (15). Codes are stored as keyed 
 
 ### Endpoints: MFA — `POST /api/v1/auth/mfa/enroll`, `POST /api/v1/auth/mfa/confirm`
 
-Optional TOTP step-up. **Disabled by default:** both return `409 mfa_disabled` unless `MFA_MODE=totp`. Enroll returns `{"secret": "<base32>", "digits": 6, "period_seconds": 30}` once; confirm takes `{"code": "123456"}` (exactly 6 digits) and returns `204`. Errors: `409 mfa_already_enabled`, `409 mfa_enrollment_missing`, `422 mfa_code_invalid`. **Frontend:** hide MFA UI unless the product enables it (no API reports the mode; see gap G-18). **Status:** Implemented — tested.
+Optional TOTP second factor (profile screen). **Enrollment is disabled by default:** both return `409 mfa_disabled` unless `MFA_MODE=totp`. Enroll returns `{"secret": "<base32>", "digits": 6, "period_seconds": 30}` once (render it as `otpauth://totp/Kumbh%20Milan:<username>?secret=<secret>&issuer=Kumbh%20Milan&digits=6&period=30`); confirm takes `{"code": "123456"}` (exactly 6 digits) and returns `204`. Errors: `409 mfa_already_enabled`, `409 mfa_enrollment_missing`, `422 mfa_code_invalid`.
+
+After confirm: `GET /auth/me` reports `mfa_enabled: true`; every other session of the user is signed out (the calling session stays); and every later `POST /auth/login` answers `mfa_required: true`, so sign-in needs `POST /auth/mfa/verify-login`. `users.totp_enabled` is the source of truth: switching `MFA_MODE` back to `disabled` stops new enrollments but never lets an enrolled account skip the code. There is no self-service MFA reset. **Status:** Implemented — tested.
 
 ---
 
@@ -2103,13 +2151,66 @@ Finalize verifies exact size and SHA-256, then reuses signature validation, priv
 
 ---
 
+## 13d. Staff help assistant
+
+### Endpoint: Ask the assistant — `POST /api/v1/assistant/ask`
+
+**Purpose:** in-app help for staff ("How do I register a missing person?"), replacing the frontend's local keyword FAQ. **Auth:** Bearer, permission `assistant:use` (help desk operators, police officers, administrators); PUBLIC accounts get `403 permission_denied`. **Rate limit:** `assistant`, 20/min per user (`RATE_LIMIT_ASSISTANT_PER_MINUTE`). **Optional header:** `Idempotency-Key` (8–128 chars).
+
+<!-- validate: app.schemas.assistant:AssistantAskRequest -->
+```json
+{"question": "How do I register a missing person?", "locale": "en"}
+```
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `question` | string | yes | Trimmed, then 1–1000 characters. Empty or whitespace-only is `422`. |
+| `locale` | string | no | `en` (default) or `hi`. Anything else is `422`. |
+
+**Success 200** — `AssistantAnswerResponse`:
+
+<!-- validate: app.schemas.assistant:AssistantAnswerResponse -->
+```json
+{
+  "answer": "Open Missing Person Registration from Cases, fill in what is known, then submit. …",
+  "locale": "en",
+  "sources": ["Missing Person Registration"]
+}
+```
+
+Hindi (`"locale": "hi"`) answers are written in Hindi, whatever language the question is in:
+
+<!-- validate: app.schemas.assistant:AssistantAnswerResponse -->
+```json
+{"answer": "Cases में Missing Person Registration खोलें, जो जानकारी उपलब्ध है वह भरें और सबमिट करें। …", "locale": "hi", "sources": ["गुमशुदा व्यक्ति पंजीकरण"]}
+```
+
+`sources` lists the titles of the help articles the answer is based on, in the answer's language; it is always present and is `[]` when the assistant cannot confirm an answer. In that case `answer` says so and points the user to their station administrator or help-desk supervisor.
+
+**How answers are produced.** Answers come only from the reviewed knowledge base `backend/app/services/assistant_knowledge.py` (registration of all four case types, case search, status and tracking, assignment, notes, contact reveal, matching, person and item reunification, custody, citizen submissions, family messages, police / help-desk / admin roles, volunteers, sign-in, passwords, MFA setup and sign-in, navigation, dashboard and reports, grievances, chat handoff, offline sync, notifications). The assistant has no access to cases, people, contacts, or users; questions naming a case number get a fixed "search for it in Cases" answer. `ASSISTANT_PROVIDER=faq` (default) returns the best-matching article; `ASSISTANT_PROVIDER=llm` has an OpenAI-compatible model phrase the answer from the matched articles only, with emails and digit runs redacted from the question first. Questions that match no article are never sent to the model.
+
+**Errors:**
+
+| HTTP | `code` | Cause |
+|---|---|---|
+| 401 | `unauthenticated`, `invalid_token`, `token_expired`, `session_revoked` | No or bad bearer token (checked before the body). |
+| 403 | `permission_denied` | Not a staff account. |
+| 409 | `idempotency_key_reused` | Same key, different question or locale. |
+| 422 | `validation_failed`, `invalid_idempotency_key` | See the field rules above. |
+| 429 | `too_many_requests` | `details.policy = "assistant"`, `Retry-After`. |
+| 503 | `assistant_unavailable` | `ASSISTANT_PROVIDER=disabled`, or the model failed, timed out, or returned an empty / unusable answer and `ASSISTANT_LLM_FALLBACK_TO_FAQ=false`. With the fallback on (default), model failures return the article text instead. |
+
+**Idempotency:** with `Idempotency-Key`, a retry of the same question and locale by the same user returns the stored answer with `Idempotent-Replayed: true` and does not ask again. Only the answer is stored (`assistant_answers`), never the question. **Status:** Implemented — tested (`tests/test_assistant.py`).
+
+---
+
 ## 14. Error code reference
 
 Every `code` the backend can return, by HTTP status. Codes are stable identifiers; messages are English and may change. Map codes to UI copy (and Hindi translations) in the frontend.
 
 | HTTP | Codes |
 |---|---|
-| 401 | `unauthenticated` (no/non-bearer header), `token_expired`, `invalid_token`, `session_revoked`, `invalid_credentials`, `invalid_refresh_token` |
+| 401 | `unauthenticated` (no/non-bearer header), `token_expired`, `invalid_token`, `session_revoked`, `invalid_credentials`, `invalid_refresh_token`, `mfa_code_invalid` (verify-login), `mfa_challenge_expired`, `mfa_challenge_invalid` |
 | 403 | `permission_denied`, `station_scope`, `self_lockout`, `separation_of_duties`, `mfa_enrollment_required`, `step_up_required` |
 | 404 | `not_found` (unknown route), `case_not_found`, `note_not_found`, `attachment_not_found`, `upload_session_not_found`, `contact_not_found`, `match_not_found`, `handover_not_found`, `station_not_found`, `user_not_found`, `location_not_found`, `legal_hold_not_found`, `retention_run_not_found` |
 | 405 | `method_not_allowed` |
@@ -2117,9 +2218,11 @@ Every `code` the backend can return, by HTTP status. Codes are stable identifier
 | 413 | `payload_too_large` |
 | 415 | `unsupported_media_type`, `media_type_mismatch`, `content_type_mismatch` |
 | 422 | `validation_failed` (general schema; `details` = list), `validation_error` (registration), `station_required`, `invalid_station`, `invalid_location`, `coordinates_out_of_area`, `coordinate_source_required`, `required_field`, `invalid_assignee`, `match_required`, `invalid_match`, `match_not_confirmed` (status change), `verification_required`, `safeguarding_evidence_required`, `handover_not_completed`, `identity_document_required`, `upload_checksum_mismatch`, `storage_location_required`, `handover_required`, `blank_note`, `correction_target_required`, `unexpected_correction_target`, `incompatible_case_types`, `invalid_idempotency_key`, `empty_file`, `malware_detected`, `invalid_current_password`, `weak_password`, `badge_required`, `invalid_sector`, `radius_too_large`, `invalid_bbox`, `bbox_too_large`, `unsupported_locale`, `invalid_phone`, `invalid_range`, `range_too_large`, `mfa_code_invalid` |
-| 429 | `too_many_requests` (`details.policy`: `login`, `refresh`, `password_change`, `upload`, `case_create`, `search`, `general`; `Retry-After`), `rate_limit_exceeded` (`details.policy = "register"`; `Retry-After`), `account_temporarily_locked` |
+| 429 | `too_many_requests` (`details.policy`: `login`, `mfa_verify`, `refresh`, `password_change`, `upload`, `case_create`, `search`, `assistant`, `general`; `Retry-After`), `rate_limit_exceeded` (`details.policy = "register"`; `Retry-After`), `account_temporarily_locked`, `mfa_attempts_exceeded` |
 | 500 | `internal_error` |
-| 503 | `rate_limiter_unavailable` (`Retry-After`), `storage_unavailable`, `service_unavailable` |
+| 503 | `rate_limiter_unavailable` (`Retry-After`), `storage_unavailable`, `service_unavailable`, `assistant_unavailable`, `mfa_unavailable` |
+
+`mfa_code_invalid` is `422` on `POST /auth/mfa/confirm` (enrollment) and `401` on `POST /auth/mfa/verify-login` (sign-in).
 
 `match_not_confirmed` appears with two statuses: `422` when a status change references an unconfirmed match, `409` when revoking a match that is not confirmed.
 
@@ -2129,6 +2232,8 @@ Every `code` the backend can return, by HTTP status. Codes are stable identifier
 |---|---|---|---|
 | `register` | `POST /auth/register` | 10 | client IP, fail-closed |
 | `login` | `POST /auth/login` | 30 | client IP |
+| `mfa_verify` | `POST /auth/mfa/verify-login` | 30 | client IP, fail-closed |
+| `assistant` | `POST /assistant/ask` | 20 | user |
 | `refresh` | `POST /auth/refresh` | 60 | client IP |
 | `password_change` | change-password, admin `POST /users/{id}/reset-password` | 10 per hour | user |
 | `forgot_password` | `POST /auth/forgot-password` | 10 per hour | client IP, fail-closed |

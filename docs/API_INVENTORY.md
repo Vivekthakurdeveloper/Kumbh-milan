@@ -11,6 +11,7 @@ The previously running image was not queried. It was built before this source an
 | GET | `/health` | None. Liveness only |
 | GET | `/ready` | None. Dependency names only, no secrets |
 | POST | `/api/v1/auth/login` | None. Rate limited |
+| POST | `/api/v1/auth/mfa/verify-login` | MFA challenge token in body. Rate limited |
 | POST | `/api/v1/auth/refresh` | Refresh token |
 | POST | `/api/v1/public/otp/*`, `/public/status/*` | None (OTP); status JWT for GET status |
 | POST | `/api/v1/public/{missing-persons,found-persons,lost-items,found-items}`, `/public/sightings` | `X-Verified-Mobile-Token`; case submissions also require `Idempotency-Key` |
@@ -24,6 +25,7 @@ Every other `/api/v1` operation requires a bearer access token. Role checks are 
 | Group | Operations |
 |---|---|
 | Auth | Logout, current user, password change, MFA enroll, MFA confirm |
+| Help assistant | `POST /api/v1/assistant/ask` (staff, `assistant:use`) |
 | Stations and users | List, create, update, assignable officers, password reset |
 | Locations | Read and administer reference places |
 | Case types | Create, list, read, and update missing persons, found persons, lost items, and found items; assign and change status; found-item custody |
@@ -42,7 +44,7 @@ Every other `/api/v1` operation requires a bearer access token. Role checks are 
 - Item release requires `recipient_acknowledgement`.
 - Found-person bodies accept `safeguarding_review_required`.
 - CSV export requires `created_from` and `created_to`, refuses a range over 31 days, and returns at most 1000 rows.
-- MFA routes exist and return `409 mfa_disabled` unless `MFA_MODE=totp`.
+- MFA enrollment routes return `409 mfa_disabled` unless `MFA_MODE=totp`. Accounts with MFA enabled sign in in two steps: `POST /api/v1/auth/login` (challenge, no tokens) then `POST /api/v1/auth/mfa/verify-login` (no bearer; rate limited).
 - Case create / note create accept optional offline sync fields (`device_id`, `client_record_id`, …).
 - `PATCH` case update and attachment upload accept `Idempotency-Key`. Attachment upload also accepts sync form fields for durable retries.
 

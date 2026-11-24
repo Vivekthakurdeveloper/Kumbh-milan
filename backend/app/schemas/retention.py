@@ -19,7 +19,8 @@ class LegalHoldRelease(StrictModel):
 
 class LegalHoldRead(ReadModel):
     id: uuid.UUID
-    case_id: uuid.UUID
+    case_id: uuid.UUID | None
+    grievance_id: uuid.UUID | None = None
     reason: str
     reference: str | None
     placed_by_user_id: uuid.UUID

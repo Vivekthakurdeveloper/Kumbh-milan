@@ -14,8 +14,10 @@ from app.schemas.auth import (
     ForgotPasswordResponse,
     LoginRequest,
     MeResponse,
+    MfaChallengeResponse,
     MfaConfirmRequest,
     MfaEnrollResponse,
+    MfaVerifyLoginRequest,
     RefreshRequest,
     RegisterRequest,
     ResetPasswordRequest,
@@ -57,11 +59,83 @@ def register(payload: RegisterRequest, request: Request, db: DbSession) -> Token
     return _tokens(pair)
 
 
-@router.post("/login", response_model=TokenResponse, responses=errors(401, 422, 429))
-def login(payload: LoginRequest, request: Request, db: DbSession) -> TokenResponse:
-    """Exchange username and password for a 15-minute access token and a rotating refresh token."""
-    pair = auth_service.login(
+@router.post(
+    "/login",
+    response_model=TokenResponse | MfaChallengeResponse,
+    responses={
+        200: {
+            "description": (
+                "Either the token pair (MFA not enabled) or an MFA challenge (MFA enabled). "
+                "Tell them apart by `mfa_required`."
+            ),
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "tokens": {
+                            "summary": "MFA not enabled: signed in",
+                            "value": {
+                                "access_token": "eyJhbGciOiJIUzI1NiIs...",
+                                "refresh_token": "6f1c...e2.Q0xJRU5U...",
+                                "token_type": "bearer",
+                                "expires_in": 900,
+                            },
+                        },
+                        "mfa_required": {
+                            "summary": "MFA enabled: step 2 needed",
+                            "value": {
+                                "mfa_required": True,
+                                "challenge_token": "mfa.0b7e...c1.sR3x...",
+                                "message": "MFA verification required.",
+                                "challenge_expires_in": 300,
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        **errors(401, 422, 429),
+    },
+)
+def login(payload: LoginRequest, request: Request, db: DbSession) -> TokenResponse | MfaChallengeResponse:
+    """
+    Step 1 of sign-in. Exchange username and password for a 15-minute access token and a rotating refresh token.
+
+    When the account has MFA enabled, no tokens and no session are issued. The answer is instead
+    `{"mfa_required": true, "challenge_token", "message", "challenge_expires_in"}`: show the 6-digit code input
+    and call POST /auth/mfa/verify-login (step 2) with the challenge token. A wrong password gives the same
+    `401 invalid_credentials` whether or not the account exists or uses MFA.
+    """
+    result = auth_service.login(
         db, username=payload.username, password=payload.password, user_agent=request.headers.get("user-agent")
+    )
+    if isinstance(result, auth_service.MfaChallenge):
+        return MfaChallengeResponse(challenge_token=result.challenge_token, challenge_expires_in=result.expires_in)
+    return _tokens(result)
+
+
+@router.post(
+    "/mfa/verify-login",
+    response_model=TokenResponse,
+    responses=errors(401, 422, 429, 503),
+    summary="Step 2 of sign-in for MFA accounts: exchange the challenge and a 6-digit code for tokens",
+)
+def verify_mfa_login(payload: MfaVerifyLoginRequest, request: Request, db: DbSession) -> TokenResponse:
+    """
+    Completes sign-in after POST /auth/login answered `mfa_required: true`. Returns the same token pair as a
+    normal login. No bearer token is needed or accepted here.
+
+    - `401 mfa_code_invalid`: wrong code (or a code already used); retry with the next code.
+    - `401 mfa_challenge_expired` / `401 mfa_challenge_invalid`: the challenge is expired, already used, or
+      superseded by a newer login; sign in again.
+    - `429 mfa_attempts_exceeded`: too many wrong codes for this challenge (default 5); sign in again.
+    - `429 account_temporarily_locked`: wrong codes count toward the same lockout as wrong passwords.
+    - `429 too_many_requests`: per-IP rate limit, with `Retry-After`.
+
+    The challenge is single-use and lasts `MFA_LOGIN_CHALLENGE_TTL_SECONDS` (default 300).
+    """
+    pair = auth_service.verify_mfa_login(
+        db, challenge_token=payload.challenge_token, code=payload.mfa_code,
+        user_agent=request.headers.get("user-agent"),
     )
     return _tokens(pair)
 
@@ -80,14 +154,22 @@ def logout(principal: CurrentPrincipal, db: DbSession) -> None:
 
 @router.post("/mfa/enroll", response_model=MfaEnrollResponse, responses=errors(401, 409))
 def enroll_mfa(principal: CurrentPrincipal, db: DbSession) -> MfaEnrollResponse:
-    """Start TOTP enrollment. The secret is returned once. Disabled unless MFA_MODE=totp."""
+    """
+    Start TOTP enrollment (profile screen). The secret is returned once: show it as a QR code /
+    `otpauth://totp/...?secret=...&digits=6&period=30` for an authenticator app. Disabled (`409 mfa_disabled`)
+    unless MFA_MODE=totp; `409 mfa_already_enabled` once enabled.
+    """
     return MfaEnrollResponse(secret=mfa.begin_enrollment(db, principal.user))
 
 
 @router.post("/mfa/confirm", status_code=status.HTTP_204_NO_CONTENT, responses=errors(401, 409, 422))
 def confirm_mfa(payload: MfaConfirmRequest, principal: CurrentPrincipal, db: DbSession) -> None:
-    """Enable TOTP after the caller proves the current code. This is not phishing-resistant MFA."""
-    mfa.confirm_enrollment(db, principal.user, payload.code)
+    """
+    Enable TOTP after the caller proves the current code (`422 mfa_code_invalid` otherwise). From then on
+    POST /auth/login answers `mfa_required: true` and sign-in needs POST /auth/mfa/verify-login. Every other
+    session of this user is signed out; the calling session stays signed in. This is not phishing-resistant MFA.
+    """
+    mfa.confirm_enrollment(db, principal.user, payload.code, keep_session_id=principal.session_id)
 
 
 @router.get("/me", response_model=MeResponse, responses=errors(401))
@@ -96,6 +178,7 @@ def me(principal: CurrentPrincipal) -> MeResponse:
     return MeResponse(
         **UserRead.model_validate(user).model_dump(),
         permissions=sorted(p.value for p in ROLE_PERMISSIONS[Role(user.role)]),
+        mfa_enabled=bool(user.totp_enabled),
     )
 
 

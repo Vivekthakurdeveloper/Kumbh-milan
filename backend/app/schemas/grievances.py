@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import GrievanceCategory, GrievanceEventKind, GrievanceStatus, UrgencyLevel
+from app.models.enums import GrievanceCategory, GrievanceEventKind, GrievanceStatus, MediaType, ScanStatus, UrgencyLevel
 from app.schemas.common import LongText, Reason, ShortText, StrictModel
 
 
@@ -30,6 +30,26 @@ class GrievancePublicEvent(BaseModel):
     created_at: datetime
 
 
+class GrievancePublicAttachment(BaseModel):
+    """A file the citizen uploaded. Staff evidence is never listed to the citizen."""
+
+    id: uuid.UUID
+    media_type: MediaType
+    file_size_bytes: int
+    scan_status: ScanStatus
+    created_at: datetime
+
+
+class GrievanceAttachmentRead(GrievancePublicAttachment):
+    original_filename: str | None
+    content_type: str
+    checksum_sha256: str
+    uploaded_by_user_id: uuid.UUID | None
+    by_citizen: bool
+    scanned_at: datetime | None
+    downloadable: bool = Field(False, description="True once the file passed malware scanning")
+
+
 class GrievancePublicRead(BaseModel):
     reference: str
     category: GrievanceCategory
@@ -39,6 +59,7 @@ class GrievancePublicRead(BaseModel):
     updated_at: datetime
     resolved_at: datetime | None
     events: list[GrievancePublicEvent] = []
+    attachments: list[GrievancePublicAttachment] = []
 
 
 class GrievanceCitizenComment(StrictModel):
@@ -87,7 +108,10 @@ class GrievanceEventRead(BaseModel):
 class GrievanceDetail(GrievanceRead):
     description: str
     resolution: str | None
+    anonymized_at: datetime | None
+    legal_hold_active: bool
     events: list[GrievanceEventRead]
+    attachments: list[GrievanceAttachmentRead]
 
 
 class GrievanceAssign(StrictModel):

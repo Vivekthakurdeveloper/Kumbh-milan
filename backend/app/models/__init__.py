@@ -1,5 +1,5 @@
 from app.models.audit import AuditEvent
-from app.models.chat import ChatMessage, ChatSession
+from app.models.chat import AssistantAnswer, ChatMessage, ChatSession
 from app.models.case import (
     Case,
     CaseNumberCounter,
@@ -24,7 +24,7 @@ from app.models.organization import Station, User
 from app.models.reporting import ItemCategory, ReportJob, ReportSchedule
 from app.models.public import OtpChallenge, PublicInformationItem, PublicSighting, PushDeviceToken
 from app.models.retention import LegalHold, RetentionRun
-from app.models.security import IdempotencyKey, LoginAttempt, PasswordResetToken, RefreshToken
+from app.models.security import IdempotencyKey, LoginAttempt, MfaLoginChallenge, PasswordResetToken, RefreshToken
 from app.models.sync import AttachmentUploadSession, SyncDeliveredCase, SyncDevice, SyncTombstone
 from app.models.workflow import (
     CaseAssignment,
@@ -37,6 +37,7 @@ from app.models.workflow import (
 )
 
 __all__ = [
+    "AssistantAnswer",
     "ChatMessage",
     "ChatSession",
     "Grievance",
@@ -68,6 +69,7 @@ __all__ = [
     "Location",
     "LoginAttempt",
     "LostItemDetails",
+    "MfaLoginChallenge",
     "MissingPersonDetails",
     "Notification",
     "OtpChallenge",

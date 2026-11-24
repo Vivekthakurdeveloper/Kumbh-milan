@@ -23,6 +23,7 @@ from app.storage import ObjectStorage, get_storage
 
 router = APIRouter(tags=["Retention"], dependencies=[Depends(requires(Permission.RETENTION_MANAGE))])
 STATE = {**AUTHED, **errors(404, 409)}
+OWNER_ONLY_POLICIES = (RetentionPolicy.ANONYMIZE_ARCHIVED_CASES, RetentionPolicy.ANONYMIZE_CLOSED_GRIEVANCES)
 
 
 @router.get("/retention/policies", response_model=list[RetentionPolicyRead], responses=AUTHED)
@@ -72,7 +73,7 @@ def execute_run(
     """
     run = retention_service.get_run(db, principal.user, run_id)
     settings = get_settings()
-    if run.policy == RetentionPolicy.ANONYMIZE_ARCHIVED_CASES and settings.app_env in ("staging", "production"):
+    if run.policy in OWNER_ONLY_POLICIES and settings.app_env in ("staging", "production"):
         raise Conflict("Run anonymisation with the retention task (retention-execute)", code="execute_via_retention_task")
     return retention_service.execute_run(db, storage, run_id, principal.user)
 
@@ -91,3 +92,24 @@ def place_hold(case_id: uuid.UUID, payload: LegalHoldCreate, principal: CurrentP
 @router.post("/cases/{case_id}/legal-holds/{hold_id}/release", response_model=LegalHoldRead, responses=STATE)
 def release_hold(case_id: uuid.UUID, hold_id: uuid.UUID, payload: LegalHoldRelease, principal: CurrentPrincipal, db: DbSession):
     return retention_service.release_hold(db, principal.user, case_id, hold_id, payload.reason)
+
+
+@router.get("/grievances/{grievance_id}/legal-holds", response_model=list[LegalHoldRead], responses=STATE)
+def list_grievance_holds(grievance_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession):
+    return retention_service.list_grievance_holds(db, principal.user, grievance_id)
+
+
+@router.post(
+    "/grievances/{grievance_id}/legal-holds", response_model=LegalHoldRead, status_code=status.HTTP_201_CREATED,
+    responses=STATE,
+)
+def place_grievance_hold(grievance_id: uuid.UUID, payload: LegalHoldCreate, principal: CurrentPrincipal, db: DbSession):
+    """While a hold is active the grievance is never anonymised."""
+    return retention_service.place_grievance_hold(db, principal.user, grievance_id, payload.reason, payload.reference)
+
+
+@router.post("/grievances/{grievance_id}/legal-holds/{hold_id}/release", response_model=LegalHoldRead, responses=STATE)
+def release_grievance_hold(
+    grievance_id: uuid.UUID, hold_id: uuid.UUID, payload: LegalHoldRelease, principal: CurrentPrincipal, db: DbSession
+):
+    return retention_service.release_grievance_hold(db, principal.user, grievance_id, hold_id, payload.reason)

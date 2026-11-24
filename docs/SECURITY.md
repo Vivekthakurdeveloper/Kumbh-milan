@@ -6,13 +6,17 @@ This is an application review of the changes in this tree. It is not a penetrati
 
 Argon2id hashes passwords. Access tokens are short-lived JWTs with issuer `kumbh-setu`. Refresh tokens rotate, and reuse revokes the session. Failed logins lock the account. Password changes and resets revoke sessions. Production settings reject placeholder secrets, open CORS, in-memory rate limits, API docs, and a non-ClamAV scan mode.
 
-`MFA_MODE=totp` adds a six-digit step-up header for admin password reset and API retention execution. The secret is encrypted with the contact Fernet key and returned only at enrollment. This TOTP implementation is not phishing-resistant. Production MFA is `BLOCKED` until an approved mechanism and recovery procedure exist. `MFA_MODE` stays `disabled` by default.
+`MFA_MODE=totp` enables TOTP enrollment and adds a six-digit step-up header for admin password reset and API retention execution. Once an account has `totp_enabled`, sign-in is two-step regardless of `MFA_MODE`: `POST /auth/login` returns only a challenge (opaque, SHA-256-hashed at rest, bound to the user and their `token_version`, 5-minute TTL, single-use under a row lock, superseded by a newer login) and no session exists until `POST /auth/mfa/verify-login` accepts a code. Wrong codes burn the challenge after `MFA_LOGIN_MAX_ATTEMPTS` and count toward the login lockout; a code's time step is never accepted twice. Confirming enrollment signs out the user's other sessions. The secret is encrypted with the contact Fernet key and returned only at enrollment. This TOTP implementation is not phishing-resistant. Production MFA is `BLOCKED` until an approved mechanism and recovery procedure exist. `MFA_MODE` stays `disabled` by default.
 
 Active accounts can use `POST /api/v1/auth/forgot-password` and `POST /api/v1/auth/reset-password` with their username, registered email, or registered mobile number. Numeric reset codes are single-use, time-limited, superseded by a newer request, burned after repeated failures, and stored only as HMAC-SHA-256 values keyed from `JWT_SECRET`. Existing and non-existing accounts receive the same acknowledgement. Per-IP and silent per-account limits apply. SMS delivery supplies the configured notification provider with the DLT `PASSWORD_RESET` template and OTP variable; without approved provider credentials and a `PASSWORD_RESET` template ID, SMS recovery is not operational. The separate admin reset route remains available to administrators.
 
 Citizen portal authentication uses purpose-bound OTP challenges and short-lived JWTs signed with `PUBLIC_SECURITY_SECRET` (falls back to `JWT_SECRET` only in local/test). Verified-mobile tokens are restricted to a purpose and mobile hash; status tokens are restricted to one case and `status:read`. OTP codes, mobiles, emails, and push tokens are never written to audit payloads or application logs.
 
 Mobile scope-revocation tombstones are generated only from a per-user ledger of cases previously returned by sync. Their payload contains only case id, reason, and timestamp; it never discloses the new station, assignee, case fields, or PII.
+
+## Staff help assistant
+
+`POST /api/v1/assistant/ask` requires a staff session (`assistant:use`). It answers only from the reviewed knowledge base in `app/services/assistant_knowledge.py` and has no access to cases, people, contacts, or users. With `ASSISTANT_PROVIDER=llm`, questions matching no article are never sent out; others are sent with emails and digit runs redacted, and the model sees only the matched articles. Answers that are empty, in the wrong script, or echo the hidden instructions are discarded. Questions are not logged or stored; `ASSISTANT_LLM_API_KEY` is redacted from audit payloads.
 
 ## Authorization
 

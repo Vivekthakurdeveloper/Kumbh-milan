@@ -1,9 +1,6 @@
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.api.middleware import RequestGuardMiddleware
 from app.config import Settings, get_settings
 from tests.helpers import API
 
@@ -22,6 +19,7 @@ def test_openapi_documents_every_operation(client):
     # Credentials-by-body or credentials-in-path endpoints: the token or code is the credential.
     public = {
         f"{API}/auth/login",
+        f"{API}/auth/mfa/verify-login",
         f"{API}/auth/refresh",
         f"{API}/auth/register",
         f"{API}/auth/forgot-password",

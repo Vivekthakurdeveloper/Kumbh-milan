@@ -4,6 +4,8 @@ Command, from `backend`, against local Postgres (`TEST_DATABASE_URL` → `kumbh_
 
 ```bash
 .venv/bin/python -m pytest -q --tb=line
+.venv/bin/python -m ruff check app tests alembic
+.venv/bin/python -m app.cli export-openapi --check   # regenerate with: python -m app.cli export-openapi
 ```
 
 ## Result (2026-11-21, registration profile and requested API contract)
@@ -17,7 +19,21 @@ Command, from `backend`, against local Postgres (`TEST_DATABASE_URL` → `kumbh_
 - API documentation validator: **66 examples checked, 0 failed**
 - Schema revision expected: **0013**
 
-## Current worktree verification (2026-11-23)
+## Current worktree verification (2026-11-24, revision 0018)
+
+- Full isolated PostgreSQL/PostGIS suite (fresh schema): **441 passed, 3 skipped** in 597 seconds.
+- Skips: the two Redis-backed rate-limit tests (no Redis was running locally; CI provides one) and the real ClamAV EICAR test (`CLAMAV_INTEGRATION_HOST` unset).
+- New coverage:
+  - `test_grievance_retention.py`: grievance attachments (scan, replay, limit, privacy, download), grievance legal holds, and anonymisation, including the append-only trigger exception.
+  - `test_key_rotation.py`: dual-read, dry run, resumable apply, idempotent re-run, validation of previous keys, and the rotation-only trigger exception.
+  - `test_operations_modules.py`: realtime staff-notification events, PDF reports (two-page, empty, non-ASCII), and the WhatsApp inbound webhook (auth, idempotency, session reuse, locale, phone never stored).
+- `alembic downgrade 0017` followed by `upgrade head` succeeds, and `alembic check` reports no drift.
+- `ruff check app tests alembic` passes. Pre-existing unused imports were removed; migration files were not touched.
+- `python -m app.cli export-openapi --check` passes: **165 paths / 196 operations**. The document produced without a `.env` file is identical.
+- API documentation validator: **73 examples checked, 0 failed**.
+- `docker compose --profile workers config` validates with the new `clamav` and `operations-worker` services. They were not started.
+
+## Earlier worktree verification (2026-11-23)
 
 - Full isolated PostgreSQL/PostGIS suite: **413 passed, 1 skipped** in 208 seconds.
 - Skip: real ClamAV EICAR integration (`CLAMAV_INTEGRATION_HOST` unset).

@@ -14,7 +14,6 @@ from app.common.errors import NotFound, Unauthenticated, ValidationFailed
 from app.common.security_hash import keyed_hash
 from app.common.time import utcnow
 from app.models import Case, PushDeviceToken, User
-from app.models.enums import PushPlatform
 from app.schemas.public import PushTokenRegister
 
 

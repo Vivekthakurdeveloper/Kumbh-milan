@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session, contains_eager, joinedload
 from app.models import (
     Case,
     CaseContact,
-    Location,
     CaseNumberCounter,
     FoundItemDetails,
     FoundPersonDetails,
+    Location,
     LostItemDetails,
     MissingPersonDetails,
 )

@@ -1,4 +1,5 @@
 import hmac
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -8,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import AuditAction, record_audit
+from app.auth import mfa
 from app.auth.passwords import (
     dummy_hash,
     hash_password,
@@ -16,23 +18,42 @@ from app.auth.passwords import (
     validate_public_registration_password,
     verify_password,
 )
-from app.auth.tokens import create_access_token, hash_token, new_refresh_token, parse_refresh_token
+from app.auth.tokens import (
+    create_access_token,
+    hash_token,
+    new_mfa_challenge_token,
+    new_refresh_token,
+    parse_mfa_challenge_token,
+    parse_refresh_token,
+)
 from app.common.context import client_ip_var
-from app.common.errors import Conflict, TooManyRequests, Unauthenticated, ValidationFailed
+from app.common.errors import Conflict, ServiceUnavailable, TooManyRequests, Unauthenticated, ValidationFailed
 from app.common.time import utcnow
 from app.config import get_settings
-from app.models import LoginAttempt, RefreshToken, User
+from app.models import LoginAttempt, MfaLoginChallenge, RefreshToken, User
 from app.models.enums import Role
 from app.notifications import normalise_phone
 from app.observability.metrics import AUTH_FAILURES
 
+logger = logging.getLogger("kumbh_setu.auth")
+
 INVALID_CREDENTIALS = "Invalid username or password"
+INVALID_CHALLENGE = "The sign-in challenge is invalid or has already been used. Sign in again."
+TOO_MANY_CODES = "Too many incorrect authentication codes. Sign in again."
 
 
 @dataclass(frozen=True)
 class TokenPair:
     access_token: str
     refresh_token: str
+    expires_in: int
+
+
+@dataclass(frozen=True)
+class MfaChallenge:
+    """Returned by login instead of tokens when the account has MFA enabled."""
+
+    challenge_token: str
     expires_in: int
 
 
@@ -93,7 +114,7 @@ def _login_username_candidates(username: str) -> tuple[str, list[str]]:
     return lockout_key, candidates
 
 
-def login(db: Session, *, username: str, password: str, user_agent: str | None) -> TokenPair:
+def login(db: Session, *, username: str, password: str, user_agent: str | None) -> TokenPair | MfaChallenge:
     username, candidates = _login_username_candidates(username)
     ip = client_ip_var.get()
     if _is_locked_out(db, username):
@@ -127,9 +148,125 @@ def login(db: Session, *, username: str, password: str, user_agent: str | None) 
 
     if needs_rehash(user.password_hash):
         user.password_hash = hash_password(password)
+    if user.totp_enabled:
+        # The password alone is not enough: no session exists until verify_mfa_login succeeds, and the
+        # successful LoginAttempt is recorded only then, so earlier failures still count toward lockout.
+        challenge = _issue_mfa_challenge(db, user, login_key=username)
+        db.commit()
+        return challenge
     pair = _create_session(db, user, user_agent=user_agent)
     db.add(LoginAttempt(username=username, client_ip=ip, succeeded=True))
     record_audit(db, action=AuditAction.LOGIN_SUCCEEDED, entity_type="user", actor_user_id=user.id, entity_id=user.id)
+    db.commit()
+    return pair
+
+
+def _issue_mfa_challenge(db: Session, user: User, *, login_key: str) -> MfaChallenge:
+    settings = get_settings()
+    now = utcnow()
+    db.execute(
+        update(MfaLoginChallenge)
+        .where(MfaLoginChallenge.user_id == user.id, MfaLoginChallenge.consumed_at.is_(None))
+        .values(consumed_at=now, consumed_reason="superseded")
+    )
+    row = MfaLoginChallenge(
+        id=uuid.uuid4(), user_id=user.id, token_hash="", login_key=login_key, token_version=user.token_version,
+        attempts=0, expires_at=now + timedelta(seconds=settings.mfa_login_challenge_ttl_seconds),
+        client_ip=client_ip_var.get(),
+    )
+    token, row.token_hash = new_mfa_challenge_token(row.id)
+    db.add(row)
+    record_audit(
+        db, action=AuditAction.MFA_CHALLENGE_ISSUED, entity_type="user", actor_user_id=user.id, entity_id=user.id,
+        after={"challenge_id": row.id, "method": "totp"},
+    )
+    return MfaChallenge(challenge_token=token, expires_in=settings.mfa_login_challenge_ttl_seconds)
+
+
+def _consume(challenge: MfaLoginChallenge, reason: str) -> None:
+    challenge.consumed_at, challenge.consumed_reason = utcnow(), reason
+
+
+def verify_mfa_login(db: Session, *, challenge_token: str, code: str, user_agent: str | None) -> TokenPair:
+    """
+    Second login step. The challenge row and the user row are locked, so concurrent requests with the same
+    challenge (or the same code on two challenges) cannot both succeed. A code's time step is remembered and
+    never accepted twice. Wrong codes count toward the per-challenge limit and the account lockout.
+    """
+    settings = get_settings()
+    challenge_id = parse_mfa_challenge_token(challenge_token)
+    challenge = db.scalar(
+        select(MfaLoginChallenge).where(MfaLoginChallenge.id == challenge_id).with_for_update()
+    ) if challenge_id else None
+    if challenge is None or not hmac.compare_digest(hash_token(challenge_token), challenge.token_hash):
+        AUTH_FAILURES.labels("mfa_challenge_invalid").inc()
+        raise Unauthenticated(INVALID_CHALLENGE, code="mfa_challenge_invalid")
+    if challenge.consumed_at is not None:
+        AUTH_FAILURES.labels("mfa_challenge_invalid").inc()
+        if challenge.consumed_reason == "too_many_attempts":
+            raise TooManyRequests(TOO_MANY_CODES, code="mfa_attempts_exceeded")
+        raise Unauthenticated(INVALID_CHALLENGE, code="mfa_challenge_invalid")
+    if challenge.expires_at <= utcnow():
+        _consume(challenge, "expired")
+        db.commit()
+        AUTH_FAILURES.labels("mfa_challenge_expired").inc()
+        raise Unauthenticated("The sign-in challenge has expired. Sign in again.", code="mfa_challenge_expired")
+
+    user = db.get(User, challenge.user_id, with_for_update=True)
+    if (
+        user is None
+        or not user.is_active
+        or not user.totp_enabled
+        or user.token_version != challenge.token_version
+    ):
+        _consume(challenge, "invalidated")
+        db.commit()
+        AUTH_FAILURES.labels("mfa_challenge_invalid").inc()
+        raise Unauthenticated(INVALID_CHALLENGE, code="mfa_challenge_invalid")
+    if _is_locked_out(db, challenge.login_key):
+        _consume(challenge, "locked_out")
+        db.commit()
+        AUTH_FAILURES.labels("locked_out").inc()
+        raise TooManyRequests(
+            "Too many failed sign-in attempts. Try again later.", code="account_temporarily_locked"
+        )
+
+    try:
+        secret = mfa.user_secret(user)
+    except Exception as exc:  # noqa: BLE001 - an unreadable secret must fail closed without leaking details
+        logger.error("MFA secret unreadable", extra={"user_id": str(user.id), "error": type(exc).__name__})
+        raise ServiceUnavailable(
+            "Two-step sign-in is temporarily unavailable. Contact an administrator.", code="mfa_unavailable"
+        ) from exc
+    step = mfa.match_totp_step(secret, code)
+    replayed = step is not None and user.totp_last_used_step is not None and step <= user.totp_last_used_step
+    if step is None or replayed:
+        challenge.attempts += 1
+        db.add(LoginAttempt(username=challenge.login_key, client_ip=client_ip_var.get(), succeeded=False))
+        record_audit(
+            db, action=AuditAction.MFA_LOGIN_FAILED, entity_type="user", actor_user_id=None, entity_id=user.id,
+            after={"challenge_id": challenge.id, "attempt": challenge.attempts, "reason": "replayed" if replayed else "wrong_code"},
+        )
+        AUTH_FAILURES.labels("mfa_code_invalid").inc()
+        if challenge.attempts >= settings.mfa_login_max_attempts:
+            _consume(challenge, "too_many_attempts")
+            record_audit(
+                db, action=AuditAction.MFA_CHALLENGE_BURNED, entity_type="user", actor_user_id=None,
+                entity_id=user.id, after={"challenge_id": challenge.id, "reason": "too_many_attempts"},
+            )
+            db.commit()
+            raise TooManyRequests(TOO_MANY_CODES, code="mfa_attempts_exceeded")
+        db.commit()
+        raise Unauthenticated("The authentication code is incorrect", code="mfa_code_invalid")
+
+    user.totp_last_used_step = step
+    _consume(challenge, "used")
+    pair = _create_session(db, user, user_agent=user_agent)
+    db.add(LoginAttempt(username=challenge.login_key, client_ip=client_ip_var.get(), succeeded=True))
+    record_audit(
+        db, action=AuditAction.LOGIN_SUCCEEDED, entity_type="user", actor_user_id=user.id, entity_id=user.id,
+        after={"mfa": "totp"},
+    )
     db.commit()
     return pair
 

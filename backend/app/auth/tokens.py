@@ -62,6 +62,26 @@ def new_refresh_token(session_id: uuid.UUID) -> tuple[str, str]:
     return token, hash_token(token)
 
 
+MFA_CHALLENGE_PREFIX = "mfa."
+
+
+def new_mfa_challenge_token(challenge_id: uuid.UUID) -> tuple[str, str]:
+    """Opaque, not a JWT, so it can never pass as an access token. Returns (token, hash to store)."""
+    token = f"{MFA_CHALLENGE_PREFIX}{challenge_id}.{secrets.token_urlsafe(32)}"
+    return token, hash_token(token)
+
+
+def parse_mfa_challenge_token(token: str) -> uuid.UUID | None:
+    if not token.startswith(MFA_CHALLENGE_PREFIX):
+        return None
+    challenge_part, _, secret = token[len(MFA_CHALLENGE_PREFIX):].partition(".")
+    try:
+        challenge_id = uuid.UUID(challenge_part)
+    except ValueError:
+        return None
+    return challenge_id if secret else None
+
+
 def parse_refresh_token(token: str) -> uuid.UUID:
     session_part, _, secret = token.partition(".")
     try:

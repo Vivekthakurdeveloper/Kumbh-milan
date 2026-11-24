@@ -1,7 +1,7 @@
 """Console requests: dashboard windows, in_scope on a single case, browser-reachable media links."""
 
-from datetime import timedelta
 import uuid
+from datetime import timedelta
 from urllib.parse import parse_qs, urlparse
 
 import pytest

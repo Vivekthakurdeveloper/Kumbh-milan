@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import AwareDatetime, Field
 
-from app.models.enums import ReportCadence, ReportJobStatus, ReportType
+from app.models.enums import ReportCadence, ReportFormat, ReportJobStatus, ReportType
 from app.schemas.common import ReadModel, StrictModel
 
 
@@ -12,11 +12,13 @@ class ReportJobCreate(StrictModel):
     period_from: AwareDatetime
     period_to: AwareDatetime
     station_id: uuid.UUID | None = Field(None, description="Administrators may narrow to one station")
+    format: ReportFormat = ReportFormat.CSV
 
 
 class ReportJobRead(ReadModel):
     id: uuid.UUID
     report_type: ReportType
+    format: ReportFormat
     status: ReportJobStatus
     period_from: datetime
     period_to: datetime
@@ -36,12 +38,14 @@ class ReportScheduleCreate(StrictModel):
     cadence: ReportCadence
     station_id: uuid.UUID | None = None
     recipient_user_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
+    format: ReportFormat = ReportFormat.CSV
 
 
 class ReportScheduleRead(ReadModel):
     id: uuid.UUID
     report_type: ReportType
     cadence: ReportCadence
+    format: ReportFormat
     station_id: uuid.UUID | None
     recipient_user_ids: list[uuid.UUID]
     next_run_at: datetime

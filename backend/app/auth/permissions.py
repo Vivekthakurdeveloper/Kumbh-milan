@@ -52,10 +52,12 @@ class Permission(StrEnum):
     INTEGRATION_EXPORT = "integration:export"
     INBOUND_REVIEW = "integration:inbound_review"
     CHAT_HANDOFF = "chat:handoff"
+    ASSISTANT_USE = "assistant:use"
 
 
 _HELP_DESK = frozenset(
     {
+        Permission.ASSISTANT_USE,
         Permission.CASE_CREATE,
         Permission.CASE_READ,
         Permission.CASE_UPDATE,

@@ -18,7 +18,7 @@ def _user(nullable: bool = True) -> Mapped[uuid.UUID | None]:
 
 
 class LegalHold(TimestampMixin, Base):
-    """While a hold is active the case is excluded from archiving and anonymisation."""
+    """While a hold is active the case or grievance is excluded from archiving and anonymisation."""
 
     __tablename__ = "legal_holds"
     __table_args__ = (
@@ -27,12 +27,17 @@ class LegalHold(TimestampMixin, Base):
             name="release_fields_together",
         ),
         CheckConstraint("length(btrim(reason)) > 0", name="reason_not_blank"),
+        CheckConstraint("(case_id IS NULL) <> (grievance_id IS NULL)", name="exactly_one_subject"),
         Index("ix_legal_holds_active_case", "case_id", postgresql_where=text("released_at IS NULL")),
+        Index("ix_legal_holds_active_grievance", "grievance_id", postgresql_where=text("released_at IS NULL")),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    case_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), nullable=False, index=True
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    grievance_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("grievances.id", ondelete="RESTRICT"), nullable=True
     )
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     reference: Mapped[str | None] = mapped_column(String(200))

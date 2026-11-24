@@ -7,6 +7,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.audit import AuditAction, record_audit
 from app.auth.permissions import Permission, require_permission
 from app.common.errors import NotFound
 from app.common.time import utcnow
@@ -30,14 +31,24 @@ def notify(
         key = f"{kind.value}:{dedupe}:{recipient}"[:160]
         if db.scalar(select(StaffNotification.id).where(StaffNotification.dedupe_key == key)) is not None:
             continue
+        notification_id = uuid.uuid4()
         db.add(
             StaffNotification(
-                recipient_user_id=recipient, kind=kind, case_id=case_id, link=link[:300], dedupe_key=key,
-                status=StaffNotificationStatus.UNREAD,
+                id=notification_id, recipient_user_id=recipient, kind=kind, case_id=case_id, link=link[:300],
+                dedupe_key=key, status=StaffNotificationStatus.UNREAD,
             )
         )
+        record_created(db, notification_id, kind)
         created += 1
     return created
+
+
+def record_created(db: Session, notification_id: uuid.UUID, kind: StaffNotificationKind) -> None:
+    """Audit row that the realtime stream delivers to the recipient only."""
+    record_audit(
+        db, action=AuditAction.STAFF_NOTIFICATION_CREATED, entity_type="staff_notification",
+        entity_id=notification_id, actor_user_id=None, after={"kind": kind},
+    )
 
 
 def list_for_user(

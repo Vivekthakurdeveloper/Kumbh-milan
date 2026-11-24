@@ -4,22 +4,20 @@ from __future__ import annotations
 
 import io
 import json
-import uuid
 from datetime import timedelta
 
 import pytest
 from sqlalchemy import select, update
 
-from app.common.security_hash import generate_otp, hash_otp
+from app.common.security_hash import hash_otp
 from app.common.time import utcnow
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import Case, Notification, OtpChallenge, PublicInformationItem, PushDeviceToken
+from app.models import Case, Notification, OtpChallenge, PushDeviceToken
 from app.models.enums import NotificationStatus, NotificationTemplate, OtpPurpose, PublicReviewStatus
 from app.notifications import MockProvider, get_provider, reset_provider_cache
 from app.services import notifications as notification_service
-from app.services import otp as otp_service
-from tests.helpers import API, configure_public_intake
+from tests.helpers import API
 
 TINY_JPEG = (
     b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
@@ -433,7 +431,7 @@ def test_notification_retry_handling(client, actors, monkeypatch):
     monkeypatch.setattr(get_settings(), "notification_max_attempts", 3)
     monkeypatch.setattr(get_settings(), "notification_retry_base_seconds", 1)
     token = _verify_mobile(client)
-    created = _submit_missing(client, token).json()
+    _submit_missing(client, token)
     provider = Flaky()
     with SessionLocal() as db:
         assert notification_service.deliver_due(db, provider)["retry"] == 1

@@ -189,6 +189,7 @@ class RetentionPolicy(StrEnum):
     ARCHIVE_CLOSED_CASES = "ARCHIVE_CLOSED_CASES"
     ANONYMIZE_ARCHIVED_CASES = "ANONYMIZE_ARCHIVED_CASES"
     PURGE_ATTACHMENT_OBJECTS = "PURGE_ATTACHMENT_OBJECTS"
+    ANONYMIZE_CLOSED_GRIEVANCES = "ANONYMIZE_CLOSED_GRIEVANCES"
 
 
 class RetentionRunStatus(StrEnum):
@@ -333,6 +334,11 @@ class ReportJobStatus(StrEnum):
 class ReportCadence(StrEnum):
     DAILY = "DAILY"
     WEEKLY = "WEEKLY"
+
+
+class ReportFormat(StrEnum):
+    CSV = "CSV"
+    PDF = "PDF"
 
 
 class IntegrationKind(StrEnum):

@@ -53,6 +53,9 @@ DISPATCH_OUTCOMES = Counter(
 RETENTION_ACTIONS = Counter(
     "kumbh_retention_actions_total", "Retention job outcomes", ["policy", "outcome"], registry=REGISTRY
 )
+ASSISTANT_ANSWERS = Counter(
+    "kumbh_assistant_answers_total", "Staff help-assistant answers", ["provider", "outcome"], registry=REGISTRY
+)
 
 
 class DatabaseStateCollector(Collector):

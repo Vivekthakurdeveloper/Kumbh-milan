@@ -176,7 +176,7 @@ def find_duplicates(db: Session, actor: User, case_id: uuid.UUID) -> list[dict]:
     if me["item_name"] and hasattr(details_model, "item_name"):
         narrowing.append(func.lower(func.btrim(details_model.item_name)) == me["item_name"])
     if me["event_at"] is not None:
-        event_col = getattr(details_model, "last_seen_at", None) or getattr(details_model, "found_at")
+        event_col = getattr(details_model, "last_seen_at", None) or details_model.found_at
         narrowing.append(event_col.between(me["event_at"] - DUPLICATE_TIME_WINDOW, me["event_at"] + DUPLICATE_TIME_WINDOW))
     if case.location_id is not None:
         narrowing.append(Case.location_id == case.location_id)

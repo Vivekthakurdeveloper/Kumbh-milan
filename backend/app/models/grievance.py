@@ -19,7 +19,10 @@ class Grievance(TimestampMixin, Base):
 
     __tablename__ = "grievances"
     __table_args__ = (
-        CheckConstraint("citizen_user_id IS NOT NULL OR mobile_lookup_hash IS NOT NULL", name="has_citizen"),
+        CheckConstraint(
+            "citizen_user_id IS NOT NULL OR mobile_lookup_hash IS NOT NULL OR anonymized_at IS NOT NULL",
+            name="has_citizen",
+        ),
         CheckConstraint("(status = 'CLOSED') = (closed_at IS NOT NULL)", name="closed_at_matches_status"),
         CheckConstraint("escalation_level >= 0", name="escalation_level_non_negative"),
         Index("ix_grievances_station_status_created", "station_id", "status", "created_at"),
@@ -64,7 +67,7 @@ class Grievance(TimestampMixin, Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolution_ciphertext: Mapped[str | None] = mapped_column(Text)
-    legal_hold: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
+    anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
 
     __mapper_args__ = {"version_id_col": version}

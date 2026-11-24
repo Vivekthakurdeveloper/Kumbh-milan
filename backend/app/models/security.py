@@ -60,6 +60,34 @@ class IdempotencyKey(CreatedAtMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class MfaLoginChallenge(CreatedAtMixin, Base):
+    """
+    Issued when a correct password meets an account with MFA enabled. Only the SHA-256 of the opaque token is
+    stored. It authorises nothing except one POST /auth/mfa/verify-login, is bound to the user and their
+    token_version, expires quickly, and is consumed on success, expiry, or too many wrong codes.
+    """
+
+    __tablename__ = "mfa_login_challenges"
+    __table_args__ = (
+        CheckConstraint("attempts >= 0", name="attempts_non_negative"),
+        Index("ix_mfa_login_challenges_user_created", "user_id", "created_at"),
+        Index("ix_mfa_login_challenges_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    login_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_reason: Mapped[str | None] = mapped_column(String(32))
+    client_ip: Mapped[str | None] = mapped_column(String(64))
+
+
 class PasswordResetToken(CreatedAtMixin, Base):
     """
     A one-time code sent to a user by email or SMS. Only a keyed hash of the code is stored. A code stops

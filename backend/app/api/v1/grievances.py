@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, Response, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.api.v1.responses import AUTHED, errors
@@ -13,28 +13,38 @@ from app.common.crypto import decrypt_text
 from app.common.errors import Forbidden, Unauthenticated
 from app.common.time import utcnow
 from app.models import Grievance
-from app.models.enums import GrievanceCategory, GrievanceStatus, OtpPurpose, Role
+from app.models.enums import GrievanceCategory, GrievanceStatus, MediaType, OtpPurpose, Role, ScanStatus
 from app.schemas.common import Page, PageParams
 from app.schemas.grievances import (
     GrievanceAck,
     GrievanceAssign,
+    GrievanceAttachmentRead,
     GrievanceCitizenComment,
     GrievanceCitizenReopen,
     GrievanceCreate,
     GrievanceDetail,
+    GrievancePublicAttachment,
     GrievancePublicRead,
     GrievanceRead,
     GrievanceStaffComment,
     GrievanceStatusChange,
     GrievanceSummary,
 )
+from app.schemas.workflow import AttachmentDownload
+from app.services import attachments as attachment_service
 from app.services import grievances as grievance_service
 from app.services.grievances import OPEN_STATES, Citizen
+from app.storage import ObjectStorage, get_storage
+from app.storage.media import MediaLinks, get_media_links
+from app.storage.scanner import MalwareScanner, get_scanner
 
 public_router = APIRouter(prefix="/public/grievances", tags=["Public grievances"])
 router = APIRouter(prefix="/grievances", tags=["Grievances"])
 CITIZEN = errors(401, 403, 404, 422)
 STATE = {**AUTHED, **errors(404, 409)}
+StorageDep = Annotated[ObjectStorage, Depends(get_storage)]
+ScannerDep = Annotated[MalwareScanner, Depends(get_scanner)]
+MediaDep = Annotated[MediaLinks, Depends(get_media_links)]
 
 
 def citizen_identity(
@@ -65,7 +75,24 @@ def _public_read(db, row: Grievance, *, with_events: bool) -> GrievancePublicRea
         reference=row.reference, category=row.category, subject=row.subject, status=row.status,
         created_at=row.created_at, updated_at=row.updated_at, resolved_at=row.resolved_at,
         events=grievance_service.public_events(db, row) if with_events else [],
+        attachments=[
+            GrievancePublicAttachment.model_validate(a, from_attributes=True)
+            for a in grievance_service.attachments(db, row, citizen_only=True)
+        ] if with_events else [],
     )
+
+
+def _attachment_read(attachment) -> GrievanceAttachmentRead:
+    return GrievanceAttachmentRead.model_validate(attachment, from_attributes=True).model_copy(
+        update={"downloadable": attachment_service.is_downloadable(attachment)}
+    )
+
+
+def _upload_status(response: Response, attachment, replayed: bool) -> None:
+    if replayed:
+        response.status_code = status.HTTP_200_OK
+    elif attachment.scan_status in (ScanStatus.QUARANTINED, ScanStatus.SCANNING):
+        response.status_code = status.HTTP_202_ACCEPTED
 
 
 def _read(row: Grievance) -> GrievanceRead:
@@ -84,7 +111,10 @@ def _detail(db, row: Grievance) -> GrievanceDetail:
         **_read(row).model_dump(),
         description=decrypt_text(row.description_ciphertext),
         resolution=decrypt_text(row.resolution_ciphertext) if row.resolution_ciphertext else None,
+        anonymized_at=row.anonymized_at,
+        legal_hold_active=grievance_service.has_active_hold(db, row.id),
         events=grievance_service.staff_events(db, row),
+        attachments=[_attachment_read(a) for a in grievance_service.attachments(db, row)],
     )
 
 
@@ -121,6 +151,34 @@ def citizen_comment(reference: str, payload: GrievanceCitizenComment, citizen: C
 def citizen_reopen(reference: str, payload: GrievanceCitizenReopen, citizen: CitizenDep, db: DbSession):
     row = grievance_service.citizen_reopen(db, citizen, reference, payload.reason)
     return _public_read(db, row, with_events=True)
+
+
+@public_router.post(
+    "/{reference}/attachments", response_model=GrievancePublicAttachment, status_code=status.HTTP_201_CREATED,
+    responses={**CITIZEN, **errors(409, 413, 415),
+               202: {"model": GrievancePublicAttachment, "description": "Stored in quarantine; scan pending"}},
+    summary="Attach a photo or voice recording to your grievance",
+)
+def citizen_attach(
+    reference: str,
+    citizen: CitizenDep,
+    db: DbSession,
+    storage: StorageDep,
+    scanner: ScannerDep,
+    response: Response,
+    media_type: Annotated[MediaType, Form()],
+    file: Annotated[UploadFile, File()],
+):
+    """
+    Same quarantine and malware scanning as case attachments. Re-sending the same file returns the original
+    (200). Closed grievances and grievances at GRIEVANCE_MAX_ATTACHMENTS return 409.
+    """
+    attachment, replayed = grievance_service.citizen_add_attachment(
+        db, storage, scanner, citizen, reference, media_type=media_type, stream=file.file,
+        filename=file.filename, content_type=file.content_type,
+    )
+    _upload_status(response, attachment, replayed)
+    return GrievancePublicAttachment.model_validate(attachment, from_attributes=True)
 
 
 @router.get("", response_model=Page[GrievanceRead], responses=AUTHED, summary="Grievance queue (station scoped)")
@@ -174,3 +232,40 @@ def staff_comment(
     grievance_id: uuid.UUID, payload: GrievanceStaffComment, principal: CurrentPrincipal, db: DbSession
 ):
     return _detail(db, grievance_service.comment(db, principal.user, grievance_id, payload.message, payload.internal))
+
+
+@router.post(
+    "/{grievance_id}/attachments", response_model=GrievanceAttachmentRead, status_code=status.HTTP_201_CREATED,
+    responses={**STATE, **errors(413, 415, 422),
+               202: {"model": GrievanceAttachmentRead, "description": "Stored in quarantine; scan pending"}},
+    summary="Attach staff evidence (never shown to the citizen)",
+)
+def staff_attach(
+    grievance_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    db: DbSession,
+    storage: StorageDep,
+    scanner: ScannerDep,
+    response: Response,
+    media_type: Annotated[MediaType, Form()],
+    file: Annotated[UploadFile, File()],
+):
+    attachment, replayed = grievance_service.staff_add_attachment(
+        db, storage, scanner, principal.user, grievance_id, media_type=media_type, stream=file.file,
+        filename=file.filename, content_type=file.content_type,
+    )
+    _upload_status(response, attachment, replayed)
+    return _attachment_read(attachment)
+
+
+@router.get(
+    "/{grievance_id}/attachments/{attachment_id}", response_model=AttachmentDownload, responses=STATE,
+    summary="Short-lived download URL for a scanned grievance attachment (access is audited)",
+)
+def staff_download(
+    grievance_id: uuid.UUID, attachment_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession, media: MediaDep
+):
+    url, ttl, content_type = grievance_service.attachment_download(
+        db, media, principal.user, grievance_id, attachment_id
+    )
+    return AttachmentDownload(url=url, expires_in=ttl, content_type=content_type)

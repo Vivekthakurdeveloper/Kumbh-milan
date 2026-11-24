@@ -6,11 +6,14 @@ Asia/Kolkata by clients. No holiday calendar is applied until one is approved.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import BinaryIO
 
 from sqlalchemy import false, func, or_, select, text, true
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import AuditAction, record_audit
@@ -20,18 +23,24 @@ from app.common.errors import Conflict, Forbidden, InvalidTransition, NotFound, 
 from app.common.security_hash import keyed_hash
 from app.common.time import utcnow
 from app.config import get_settings
-from app.models import Case, CaseContact, Grievance, GrievanceEvent, Station, User
+from app.models import Case, CaseAttachment, CaseContact, Grievance, GrievanceEvent, LegalHold, Station, User
 from app.models.enums import (
     GrievanceCategory,
     GrievanceEventKind,
     GrievanceStatus,
+    MediaType,
     Role,
+    ScanStatus,
     StaffNotificationKind,
     UrgencyLevel,
 )
 from app.notifications import mask
+from app.services import attachments as attachment_service
 from app.services import staff_notifications
 from app.services.cases import CASE_NUMBER_TZ
+from app.storage import ObjectStorage
+from app.storage.scanner import MalwareScanner
+from app.storage.validation import safe_display_filename
 
 G = GrievanceStatus
 OPEN_STATES = (G.OPEN, G.ASSIGNED, G.IN_PROGRESS, G.REOPENED)
@@ -291,6 +300,7 @@ def _transition(
     message: str | None,
     by_citizen: bool = False,
 ) -> None:
+    _require_not_anonymized(row)
     previous = GrievanceStatus(row.status)
     if target not in TRANSITIONS[previous]:
         raise InvalidTransition(f"Cannot move a grievance from {previous} to {target}", code="invalid_transition")
@@ -378,6 +388,7 @@ def assign(
 def comment(db: Session, actor: User, grievance_id: uuid.UUID, body: str, internal: bool) -> Grievance:
     require_permission(actor, Permission.GRIEVANCE_MANAGE)
     row = load(db, actor, grievance_id, for_update=True)
+    _require_not_anonymized(row)
     db.add(GrievanceEvent(grievance_id=row.id, kind=GrievanceEventKind.COMMENT, actor_user_id=actor.id,
                           body_ciphertext=encrypt_text(body), is_internal=internal))
     record_audit(db, action=AuditAction.GRIEVANCE_COMMENTED, entity_type="grievance", entity_id=row.id,
@@ -386,6 +397,144 @@ def comment(db: Session, actor: User, grievance_id: uuid.UUID, body: str, intern
     db.commit()
     db.refresh(row)
     return row
+
+
+# --- Attachments ---------------------------------------------------------------------------------
+
+
+def _attachments_query(grievance_id: uuid.UUID):
+    return select(CaseAttachment).where(CaseAttachment.grievance_id == grievance_id, CaseAttachment.deleted_at.is_(None))
+
+
+def attachments(db: Session, grievance: Grievance, *, citizen_only: bool = False) -> list[CaseAttachment]:
+    stmt = _attachments_query(grievance.id)
+    if citizen_only:
+        stmt = stmt.where(CaseAttachment.by_citizen.is_(True), CaseAttachment.scan_status != ScanStatus.REJECTED)
+    return list(db.scalars(stmt.order_by(CaseAttachment.created_at, CaseAttachment.id)))
+
+
+def _add_attachment(
+    db: Session,
+    storage: ObjectStorage,
+    scanner: MalwareScanner,
+    grievance_id: uuid.UUID,
+    *,
+    uploader_id: uuid.UUID | None,
+    by_citizen: bool,
+    media_type: MediaType,
+    stream: BinaryIO,
+    filename: str | None,
+    content_type: str | None,
+) -> tuple[CaseAttachment, bool]:
+    """Quarantine-first upload through the shared scan pipeline. Re-sending the same file returns the original."""
+    data, detected = attachment_service.read_validated(stream, media_type, content_type)
+    checksum = hashlib.sha256(data).hexdigest()
+    row = db.scalar(select(Grievance).where(Grievance.id == grievance_id).with_for_update())
+    if row.anonymized_at is not None or row.status == G.CLOSED:
+        raise Conflict("Closed grievances do not accept attachments; reopen it first", code="grievance_closed")
+    existing = db.scalar(_attachments_query(row.id).where(CaseAttachment.checksum_sha256 == checksum))
+    if existing is not None:
+        db.rollback()
+        return _replayed(existing)
+    live = _attachments_query(row.id).where(CaseAttachment.scan_status != ScanStatus.REJECTED)
+    count = db.scalar(select(func.count()).select_from(live.subquery())) or 0
+    if count >= get_settings().grievance_max_attachments:
+        raise Conflict("This grievance already has the maximum number of attachments", code="attachment_limit")
+
+    attachment_id = uuid.uuid4()
+    key = attachment_service.grievance_quarantine_key(row.id, attachment_id)
+    storage.put(key, data, content_type=detected.content_type, checksum_sha256=checksum)
+    db.add(CaseAttachment(
+        id=attachment_id, grievance_id=row.id, by_citizen=by_citizen, uploaded_by_user_id=uploader_id,
+        media_type=media_type, storage_key=key,
+        original_filename=safe_display_filename(filename, detected.extension), content_type=detected.content_type,
+        file_size_bytes=len(data), checksum_sha256=checksum, scan_status=ScanStatus.QUARANTINED, next_scan_at=utcnow(),
+    ))
+    record_audit(
+        db, action=AuditAction.GRIEVANCE_ATTACHMENT_ADDED, entity_type="grievance", entity_id=row.id,
+        actor_user_id=uploader_id,
+        after={"attachment_id": attachment_id, "media_type": media_type, "size": len(data), "by_citizen": by_citizen},
+    )
+    row.updated_at = func.now()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        storage.delete(key)
+        existing = db.scalar(_attachments_query(grievance_id).where(CaseAttachment.checksum_sha256 == checksum))
+        if existing is None:
+            raise
+        return _replayed(existing)
+    except Exception:
+        db.rollback()
+        storage.delete(key)
+        raise
+
+    attachment_service.process_scan(db, storage, scanner, attachment_id, data=data)
+    db.expire_all()
+    attachment = db.get(CaseAttachment, attachment_id)
+    _raise_if_rejected(attachment)
+    return attachment, False
+
+
+def _raise_if_rejected(attachment: CaseAttachment) -> None:
+    if attachment.scan_status == ScanStatus.REJECTED:
+        raise ValidationFailed(
+            "File was rejected by malware scanning and has been deleted", code="malware_detected",
+            details={"attachment_id": attachment.id},
+        )
+
+
+def _replayed(attachment: CaseAttachment) -> tuple[CaseAttachment, bool]:
+    _raise_if_rejected(attachment)
+    return attachment, True
+
+
+def citizen_add_attachment(
+    db: Session, storage: ObjectStorage, scanner: MalwareScanner, citizen: Citizen, reference: str, **upload
+) -> tuple[CaseAttachment, bool]:
+    row = citizen_get(db, citizen, reference)
+    return _add_attachment(db, storage, scanner, row.id, uploader_id=citizen.user_id, by_citizen=True, **upload)
+
+
+def staff_add_attachment(
+    db: Session, storage: ObjectStorage, scanner: MalwareScanner, actor: User, grievance_id: uuid.UUID, **upload
+) -> tuple[CaseAttachment, bool]:
+    require_permission(actor, Permission.GRIEVANCE_MANAGE)
+    row = load(db, actor, grievance_id)
+    return _add_attachment(db, storage, scanner, row.id, uploader_id=actor.id, by_citizen=False, **upload)
+
+
+def attachment_download(
+    db: Session, media, actor: User, grievance_id: uuid.UUID, attachment_id: uuid.UUID
+) -> tuple[str, int, str]:
+    row = load(db, actor, grievance_id)
+    attachment = db.scalar(_attachments_query(row.id).where(CaseAttachment.id == attachment_id))
+    if attachment is None:
+        raise NotFound("Attachment not found", code="attachment_not_found")
+    if not attachment_service.is_downloadable(attachment):
+        raise Conflict(
+            "This file is not available: it has not passed malware scanning",
+            code="attachment_not_available", details={"scan_status": attachment.scan_status},
+        )
+    url = media.url_for(attachment, actor)
+    record_audit(
+        db, action=AuditAction.ATTACHMENT_ACCESSED, entity_type="case_attachment", entity_id=attachment.id,
+        actor_user_id=actor.id, after={"grievance_id": row.id},
+    )
+    db.commit()
+    return url, media.ttl_seconds, attachment.content_type
+
+
+def has_active_hold(db: Session, grievance_id: uuid.UUID) -> bool:
+    return db.scalar(
+        select(LegalHold.id).where(LegalHold.grievance_id == grievance_id, LegalHold.released_at.is_(None)).limit(1)
+    ) is not None
+
+
+def _require_not_anonymized(row: Grievance) -> None:
+    if row.anonymized_at is not None:
+        raise Conflict("This grievance was anonymised by retention and is read-only", code="grievance_anonymized")
 
 
 def _check_version(row: Grievance, expected: int | None) -> None:

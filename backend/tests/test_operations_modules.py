@@ -3,9 +3,10 @@ outbound integrations, and the chatbot."""
 
 import json
 import time
+import uuid
 from datetime import timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.common.time import utcnow
 from app.config import get_settings
@@ -15,6 +16,7 @@ from app.models import (
     AuditEvent,
     Case,
     ChatMessage,
+    ChatSession,
     Grievance,
     Notification,
     OutboundDispatch,
@@ -292,6 +294,27 @@ def test_realtime_events_are_scoped_and_resumable(client, actors, monkeypatch):
     assert "event: reconnect" in text
 
 
+def test_realtime_streams_staff_notifications_to_the_recipient_only(client, actors):
+    from app.services import staff_notifications
+
+    start = client.get(f"{API}/events", headers=actors.police.headers).json()["next_cursor"]
+    time.sleep(0.01)
+    with SessionLocal() as db:
+        staff_notifications.notify(db, [actors.police.id], StaffNotificationKind.REPORT_READY,
+                                   link="/reports/jobs/x", dedupe="realtime-test")
+        db.commit()
+        notification_id = db.scalar(select(StaffNotification.id).where(StaffNotification.recipient_user_id == actors.police.id))
+
+    def notification_events(actor):
+        batch = client.get(f"{API}/events", params={"cursor": start}, headers=actor.headers).json()
+        return [e for e in batch["events"] if e["type"] == "staff_notification.created"]
+
+    [event] = notification_events(actors.police)
+    assert event["entity_id"] == str(notification_id) and event["case_id"] is None
+    assert notification_events(actors.police2) == []
+    assert notification_events(actors.admin) == []
+
+
 # --- BE-201 analytics ----------------------------------------------------------------------------
 
 
@@ -342,6 +365,46 @@ def test_mis_report_generation_download_and_revocation(client, actors, storage):
         assert {"REPORT_REQUESTED", "REPORT_GENERATED", "REPORT_DOWNLOADED", "REPORT_CANCELLED"} <= set(
             db.scalars(select(AuditEvent.action).where(AuditEvent.entity_type == "report_job"))
         )
+
+
+def _pdf_objects_are_indexed(body: bytes) -> bool:
+    """The xref table must point at each 'N 0 obj' header, or viewers reject the file."""
+    import re
+
+    start = int(re.search(rb"startxref\n(\d+)\n%%EOF\n$", body).group(1))
+    entries = re.findall(rb"(\d{10}) 00000 n ", body[start:])
+    return bool(entries) and all(
+        body[int(offset):].startswith(b"%d 0 obj" % number) for number, offset in enumerate(entries, start=1)
+    )
+
+
+def test_mis_report_pdf_output(client, actors, storage):
+    for _ in range(70):  # more than one page
+        create_case(client, actors.helpdesk, "missing-persons", _mp(clothing_description="(evil) \\ text"))
+    now = utcnow()
+    queued = client.post(f"{API}/reports/jobs", json={
+        "report_type": "CASES", "format": "PDF", "period_from": (now - timedelta(days=1)).isoformat(),
+        "period_to": (now + timedelta(hours=1)).isoformat(),
+    }, headers=actors.police.headers)
+    assert queued.status_code == 202 and queued.json()["format"] == "PDF", queued.text
+    with SessionLocal() as db:
+        assert mis_reports.run_queued(db, storage) == 1
+    response = client.get(f"{API}/reports/jobs/{queued.json()['id']}/download", headers=actors.police.headers)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].endswith('.pdf"')
+    body = response.content
+    assert body.startswith(b"%PDF-1.4") and _pdf_objects_are_indexed(body)
+    assert b"/Count 2" in body and b"Page 2 of 2" in body
+    assert b"case_number" in body and b"evil" not in body
+
+
+def test_pdf_writer_handles_empty_and_non_ascii():
+    from app.services.pdf import render_table
+
+    body = render_table("Title (x)", "Sub \u0939\u093f", ["a", "b"], [])
+    assert _pdf_objects_are_indexed(body) and b"\\(no rows for this period\\)" in body
+    assert b"Title \\(x\\)" in body and b"Sub ??" in body
 
 
 def test_report_schedule_creates_jobs_for_recipients(client, actors):
@@ -555,3 +618,39 @@ def test_chatbot_hindi_status_with_verified_token_and_grounded_model(client, act
     finally:
         chatbot.reset_language_model()
     assert client.post(f"{API}/public/chat/sessions", json={"locale": "xx"}).status_code == 422
+
+
+def test_whatsapp_inbound_routes_to_chatbot_idempotently(client, actors, monkeypatch):
+    url = f"{API}/webhooks/whatsapp/inbound"
+    message = {"message_id": "wamid.1", "from": "+91 98765 43210", "text": "My son is missing"}
+    assert client.post(url, json=message, headers={"X-Webhook-Token": "x"}).status_code == 503
+    monkeypatch.setattr(get_settings(), "whatsapp_webhook_secret", "wa-secret")
+    assert client.post(url, json=message, headers={"X-Webhook-Token": "wrong"}).status_code == 401
+    token = {"X-Webhook-Token": "wa-secret"}
+
+    first = client.post(url, json=message, headers=token)
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["intent"] == "REPORT_MISSING" and not body["duplicate"] and body["reply"]
+    retried = client.post(url, json=message, headers=token).json()
+    assert retried["duplicate"] and retried["reply"] == body["reply"] and retried["session_id"] == body["session_id"]
+
+    same_sender = client.post(url, json={"message_id": "wamid.2", "from": "9876543210",
+                                         "text": "Emergency, someone is drowning"}, headers=token).json()
+    assert same_sender["session_id"] == body["session_id"] and same_sender["handoff"]
+    other = client.post(url, json={"message_id": "wamid.3", "from": "9123456780",
+                                   "text": "मेरा बच्चा खो गया है"}, headers=token).json()
+    assert other["session_id"] != body["session_id"]
+    assert client.post(url, json={"message_id": "wamid.4", "from": "not-a-phone", "text": "hi"},
+                       headers=token).status_code == 422
+
+    with SessionLocal() as db:
+        sessions = {s.id: s for s in db.scalars(select(ChatSession).where(ChatSession.channel == "WHATSAPP"))}
+        stored = " ".join(db.scalars(select(ChatMessage.text_redacted)))
+        user_rows = db.scalar(select(func.count()).select_from(ChatMessage).where(ChatMessage.external_id == "wamid.1"))
+    assert len(sessions) == 2 and user_rows == 1
+    assert sessions[uuid.UUID(other["session_id"])].locale == "hi"
+    assert all("9876543210" not in (s.external_ref_hash or "") for s in sessions.values())
+    assert "9876543210" not in stored
+    queue = client.get(f"{API}/chat/sessions", headers=actors.helpdesk.headers).json()
+    assert body["session_id"] in [s["id"] for s in queue["items"]]

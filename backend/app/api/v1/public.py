@@ -21,7 +21,6 @@ from app.schemas.public import (
     PublicInformationList,
     PublicInformationRead,
     PublicInformationUpdate,
-    PublicReviewRequest,
     PublicSightingAck,
     PublicSightingCreate,
     PublicSubmissionAck,

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.audit import AuditAction, record_audit
 from app.auth.permissions import Permission, require_permission
+from app.common.crypto import encrypt_text
 from app.common.errors import Conflict, NotFound
 from app.common.time import utcnow
 from app.config import get_settings
@@ -26,11 +27,13 @@ from app.models import (
     CaseMatch,
     CaseNote,
     CaseStatusHistory,
+    Grievance,
+    GrievanceEvent,
     LegalHold,
     RetentionRun,
     User,
 )
-from app.models.enums import CaseStatus, CaseType, RetentionPolicy, RetentionRunStatus, ScanStatus
+from app.models.enums import CaseStatus, CaseType, GrievanceStatus, RetentionPolicy, RetentionRunStatus, ScanStatus
 from app.models.retention import REDACTION_PREFIX
 from app.observability.metrics import RETENTION_ACTIONS
 from app.services.access import load_case
@@ -70,6 +73,11 @@ def policies() -> list[dict[str, Any]]:
         {"policy": P.PURGE_ATTACHMENT_OBJECTS, "data": "Deleted attachments and files that failed malware scanning",
          "after_days": s.retention_attachment_purge_after_days,
          "action": "Delete the stored object; the metadata row and audit trail remain."},
+        {"policy": P.ANONYMIZE_CLOSED_GRIEVANCES, "data": "Closed grievances",
+         "after_days": s.retention_grievance_anonymize_after_days,
+         "action": "Remove the subject, description, resolution, comment text, citizen mobile/account link, and "
+                   "attachments. The reference, category, station, dates, status history, and audit trail remain. "
+                   "Irreversible."},
         {"policy": "OPERATIONAL (purge-expired CLI)", "data": "Sessions, login attempts, idempotency keys",
          "after_days": None, "action": "Deleted after expiry by `python -m app.cli purge-expired`."},
         {"policy": "AUDIT", "data": "Audit events", "after_days": None,
@@ -118,6 +126,61 @@ def list_holds(db: Session, actor: User, case_id: uuid.UUID) -> list[LegalHold]:
     return list(db.scalars(select(LegalHold).where(LegalHold.case_id == case_id).order_by(LegalHold.created_at)))
 
 
+def _active_grievance_hold():
+    return exists().where(LegalHold.grievance_id == Grievance.id, LegalHold.released_at.is_(None))
+
+
+def place_grievance_hold(
+    db: Session, actor: User, grievance_id: uuid.UUID, reason: str, reference: str | None
+) -> LegalHold:
+    from app.services import grievances as grievance_service
+
+    require_permission(actor, Permission.RETENTION_MANAGE)
+    grievance = grievance_service.load(db, actor, grievance_id, for_update=True)
+    hold = LegalHold(
+        id=uuid.uuid4(), grievance_id=grievance.id, reason=reason, reference=reference, placed_by_user_id=actor.id
+    )
+    db.add(hold)
+    record_audit(db, action=AuditAction.LEGAL_HOLD_PLACED, entity_type="legal_hold", entity_id=hold.id,
+                 actor_user_id=actor.id, reason=reason,
+                 after={"grievance_id": grievance.id, "reference": reference})
+    db.commit()
+    db.refresh(hold)
+    return hold
+
+
+def release_grievance_hold(
+    db: Session, actor: User, grievance_id: uuid.UUID, hold_id: uuid.UUID, reason: str
+) -> LegalHold:
+    from app.services import grievances as grievance_service
+
+    require_permission(actor, Permission.RETENTION_MANAGE)
+    grievance = grievance_service.load(db, actor, grievance_id)
+    hold = db.scalar(
+        select(LegalHold).where(LegalHold.id == hold_id, LegalHold.grievance_id == grievance.id).with_for_update()
+    )
+    if hold is None:
+        raise NotFound("Legal hold not found", code="legal_hold_not_found")
+    if hold.released_at is not None:
+        raise Conflict("This legal hold was already released", code="legal_hold_released")
+    hold.released_at, hold.released_by_user_id, hold.release_reason = utcnow(), actor.id, reason
+    record_audit(db, action=AuditAction.LEGAL_HOLD_RELEASED, entity_type="legal_hold", entity_id=hold.id,
+                 actor_user_id=actor.id, reason=reason, after={"grievance_id": grievance.id})
+    db.commit()
+    db.refresh(hold)
+    return hold
+
+
+def list_grievance_holds(db: Session, actor: User, grievance_id: uuid.UUID) -> list[LegalHold]:
+    from app.services import grievances as grievance_service
+
+    require_permission(actor, Permission.RETENTION_MANAGE)
+    grievance = grievance_service.load(db, actor, grievance_id)
+    return list(db.scalars(
+        select(LegalHold).where(LegalHold.grievance_id == grievance.id).order_by(LegalHold.created_at)
+    ))
+
+
 # --- Eligibility -----------------------------------------------------------------------------------
 
 
@@ -153,17 +216,25 @@ def _attachment_conditions(cutoff) -> list:
     ]
 
 
+def _grievance_conditions(cutoff) -> list:
+    return [Grievance.status == GrievanceStatus.CLOSED, Grievance.closed_at < cutoff, Grievance.anonymized_at.is_(None)]
+
+
 def _plan(db: Session, policy: RetentionPolicy, params: dict[str, Any]) -> dict[str, Any]:
     cutoff = _cutoff(policy, params)
     limit = get_settings().retention_max_items_per_run
+    hold, order = _active_hold(), (Case.created_at, Case.id)
     if policy is P.PURGE_ATTACHMENT_OBJECTS:
         base = select(CaseAttachment.id, Case.case_number).join(Case, Case.id == CaseAttachment.case_id).where(
             *_attachment_conditions(cutoff)
         )
+    elif policy is P.ANONYMIZE_CLOSED_GRIEVANCES:
+        base = select(Grievance.id, Grievance.reference).where(*_grievance_conditions(cutoff))
+        hold, order = _active_grievance_hold(), (Grievance.closed_at, Grievance.id)
     else:
         base = select(Case.id, Case.case_number).where(*_case_conditions(policy, cutoff))
-    held = db.scalar(select(text("count(*)")).select_from(base.where(_active_hold()).subquery())) or 0
-    rows = db.execute(base.where(~_active_hold()).order_by(Case.created_at, Case.id).limit(limit + 1)).all()
+    held = db.scalar(select(text("count(*)")).select_from(base.where(hold).subquery())) or 0
+    rows = db.execute(base.where(~hold).order_by(*order).limit(limit + 1)).all()
     return {
         "cutoff": cutoff.isoformat(),
         "eligible": min(len(rows), limit),
@@ -183,6 +254,7 @@ def _params(policy: RetentionPolicy) -> dict[str, Any]:
         P.ARCHIVE_CLOSED_CASES: s.retention_archive_after_days,
         P.ANONYMIZE_ARCHIVED_CASES: s.retention_anonymize_after_days,
         P.PURGE_ATTACHMENT_OBJECTS: s.retention_attachment_purge_after_days,
+        P.ANONYMIZE_CLOSED_GRIEVANCES: s.retention_grievance_anonymize_after_days,
     }[policy]
     return {"after_days": days}
 
@@ -310,6 +382,19 @@ def _execute_item(db: Session, storage: ObjectStorage, run: RetentionRun, policy
         db.commit()
         return True
 
+    if policy is P.ANONYMIZE_CLOSED_GRIEVANCES:
+        grievance = db.scalar(
+            select(Grievance)
+            .where(Grievance.id == item_id, *_grievance_conditions(cutoff), ~_active_grievance_hold())
+            .with_for_update()
+        )
+        if grievance is None:
+            db.rollback()
+            return False
+        _anonymise_grievance(db, storage, run, grievance)
+        db.commit()
+        return True
+
     case = db.scalars(
         select(Case).where(Case.id == item_id, *_case_conditions(policy, cutoff), ~_active_hold())
         .options(joinedload(Case.missing_person), joinedload(Case.found_person),
@@ -401,6 +486,37 @@ def _anonymise(db: Session, storage: ObjectStorage, run: RetentionRun, case: Cas
                  case=case, after={"retention_run_id": run.id, "attachments_purged": len(attachments),
                                    "notes_redacted": notes, "handovers_redacted": handovers,
                                    "contact_removed": contact is not None})
+
+
+def _anonymise_grievance(db: Session, storage: ObjectStorage, run: RetentionRun, grievance: Grievance) -> None:
+    marker = f"{REDACTION_PREFIX}{run.id}]"
+    db.execute(text("SELECT set_config('kumbh.retention_run_id', :rid, true)"), {"rid": str(run.id)})
+    grievance.subject = marker
+    grievance.description_ciphertext = encrypt_text(marker)
+    if grievance.resolution_ciphertext is not None:
+        grievance.resolution_ciphertext = encrypt_text(marker)
+    grievance.citizen_user_id = None
+    grievance.mobile_ciphertext = grievance.mobile_lookup_hash = grievance.mobile_hint = None
+    grievance.anonymized_at = utcnow()
+
+    comments = db.execute(
+        update(GrievanceEvent)
+        .where(GrievanceEvent.grievance_id == grievance.id, GrievanceEvent.body_ciphertext.is_not(None))
+        .values(body_ciphertext=None)
+    ).rowcount
+    attachments = list(db.scalars(
+        select(CaseAttachment).where(
+            CaseAttachment.grievance_id == grievance.id, CaseAttachment.object_purged_at.is_(None)
+        )
+    ))
+    for attachment in attachments:
+        storage.delete(attachment.storage_key)
+        attachment.object_purged_at = utcnow()
+        attachment.deleted_at = attachment.deleted_at or utcnow()
+        attachment.original_filename = None
+    record_audit(db, action=AuditAction.GRIEVANCE_ANONYMIZED, entity_type="grievance", entity_id=grievance.id,
+                 actor_user_id=None, after={"retention_run_id": run.id, "attachments_purged": len(attachments),
+                                            "event_texts_removed": comments})
 
 
 def _redact(column, marker: str):

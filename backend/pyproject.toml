@@ -32,6 +32,7 @@ dev = [
     "pytest==8.3.4",
     "httpx==0.28.1",
     "moto[s3]==5.0.24",
+    "ruff==0.8.4",
 ]
 push = [
     "firebase-admin==6.6.0",
@@ -39,6 +40,24 @@ push = [
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["models", "kumbh_setu_backend.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# E501: long lines are not enforced. B008: FastAPI declares dependencies as Depends() defaults.
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]
+known-third-party = ["alembic"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pytest fixtures imported from another module are re-bound as test parameters.
+"tests/**" = ["F811"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

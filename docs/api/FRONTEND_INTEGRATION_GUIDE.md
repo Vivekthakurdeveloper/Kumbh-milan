@@ -48,6 +48,7 @@ VITE_API_BASE_URL=/api/v1
 Facts from the backend:
 
 - `POST /auth/login` returns `access_token` (JWT, 15 min) and `refresh_token` (opaque, 7-day session) in the JSON body. **No cookies are used**; CORS is configured with `allow_credentials=false`.
+- **Two-step sign-in.** When the account has MFA enabled, `POST /auth/login` answers `200 {"mfa_required": true, "challenge_token", "message", "challenge_expires_in"}` with **no tokens**. Show a 6-digit code input and send `POST /auth/mfa/verify-login {"challenge_token", "mfa_code"}`; it returns the normal token pair. On `401 mfa_code_invalid` let the user retry; on `401 mfa_challenge_expired` / `mfa_challenge_invalid` or `429 mfa_attempts_exceeded` go back to the password step. Never send the challenge token as a bearer token. `GET /auth/me` reports `mfa_enabled`.
 - Every refresh **rotates** the refresh token. Re-using the immediately previous refresh token **revokes the session** (treated as token theft).
 - Logout, password change, admin password reset, deactivation, and role/station changes revoke sessions; the next call returns `401 session_revoked`.
 

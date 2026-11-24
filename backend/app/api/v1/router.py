@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     admin,
     assignments,
+    assistant,
     audit,
     auth,
     cases,
@@ -54,4 +55,5 @@ api_router.include_router(events.router)
 api_router.include_router(integrations.router)
 api_router.include_router(integrations.alerts)
 api_router.include_router(chat.router)
+api_router.include_router(assistant.router)
 api_router.include_router(webhooks.router)

@@ -29,10 +29,8 @@ from app.schemas.handover import (
 from app.schemas.notifications import NotificationCreate, NotificationRead
 from app.schemas.public import PublicReviewRequest
 from app.schemas.workflow import (
-    MatchGenerateResult,
-    AssignRequest,
     AssignmentRequestRead,
-    UnassignRequest,
+    AssignRequest,
     AttachmentDeleteRequest,
     AttachmentDownload,
     AttachmentRead,
@@ -40,6 +38,7 @@ from app.schemas.workflow import (
     ContactRead,
     ContactRevealRequest,
     CustodyChangeRequest,
+    MatchGenerateResult,
     MatchProposeRequest,
     MatchRead,
     MatchReviewRequest,
@@ -47,6 +46,7 @@ from app.schemas.workflow import (
     NoteCreate,
     NoteRead,
     StatusChangeRequest,
+    UnassignRequest,
 )
 from app.services import assignments as assignment_service
 from app.services import attachments as attachment_service

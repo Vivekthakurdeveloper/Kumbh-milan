@@ -236,9 +236,9 @@ def _hash(secret: str) -> str:
 
 
 def _add(db: Session, session: ChatSession, role: ChatRole, text: str, *, intent: str | None = None,
-         staff_user_id: uuid.UUID | None = None) -> ChatMessage:
+         staff_user_id: uuid.UUID | None = None, external_id: str | None = None) -> ChatMessage:
     row = ChatMessage(id=uuid.uuid4(), session_id=session.id, role=role, intent=intent,
-                      text_redacted=redact(text)[:4000], staff_user_id=staff_user_id)
+                      text_redacted=redact(text)[:4000], staff_user_id=staff_user_id, external_id=external_id)
     db.add(row)
     session.message_count += 1
     session.last_activity_at = utcnow()
@@ -354,9 +354,86 @@ def post_message(db: Session, session_id: uuid.UUID, secret: str | None, text: s
     text = text.strip()[:MAX_TEXT]
     if not text:
         raise ValidationFailed("Message is empty", code="empty_message")
+    return _respond(db, session, text, status_token)
+
+
+_DEVANAGARI = re.compile(r"[\u0900-\u097F]")
+
+
+def _whatsapp_session(db: Session, sender_hash: str, text: str) -> ChatSession:
+    settings = get_settings()
+    session = db.scalar(
+        select(ChatSession)
+        .where(
+            ChatSession.channel == ChatChannel.WHATSAPP,
+            ChatSession.external_ref_hash == sender_hash,
+            ChatSession.status != C.CLOSED,
+            ChatSession.last_activity_at >= utcnow() - timedelta(minutes=settings.chat_session_ttl_minutes),
+        )
+        .order_by(ChatSession.last_activity_at.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    if session is not None and session.message_count < settings.chat_max_messages_per_session:
+        return session
+    if session is not None:
+        session.status = C.CLOSED
+    session = ChatSession(
+        id=uuid.uuid4(), secret_hash=_hash(secrets.token_urlsafe(24)), channel=ChatChannel.WHATSAPP,
+        locale="hi" if _DEVANAGARI.search(text) else "en", status=C.OPEN, message_count=0,
+        last_activity_at=utcnow(), external_ref_hash=sender_hash,
+    )
+    db.add(session)
+    db.flush()
+    return session
+
+
+def _reply_after(db: Session, message: ChatMessage) -> Reply:
+    """The answer already given to a re-delivered message, so a retried webhook never runs the bot twice."""
+    session = db.get(ChatSession, message.session_id)
+    answer = db.scalar(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == message.session_id, ChatMessage.role == ChatRole.ASSISTANT,
+               ChatMessage.created_at >= message.created_at, ChatMessage.id != message.id)
+        .order_by(ChatMessage.created_at, ChatMessage.id)
+        .limit(1)
+    )
+    return Reply(session=session, intent=answer.intent if answer else "DUPLICATE",
+                 text=answer.text_redacted if answer else "", handoff=session.status == C.HANDED_OFF)
+
+
+def whatsapp_inbound(db: Session, *, sender: str, message_id: str, text: str) -> tuple[Reply, bool]:
+    """Routes a WhatsApp message into the sender's open chat. Returns (reply, duplicate)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.common.security_hash import keyed_hash
+    from app.notifications import normalise_phone
+
+    phone = normalise_phone(sender, get_settings().notification_default_country_code)
+    if phone is None:
+        raise ValidationFailed("Sender is not a valid mobile number", code="invalid_sender")
+    text = text.strip()[:MAX_TEXT]
+    if not text:
+        raise ValidationFailed("Message is empty", code="empty_message")
+    existing = db.scalar(select(ChatMessage).where(ChatMessage.external_id == message_id))
+    if existing is not None:
+        return _reply_after(db, existing), True
+    session = _whatsapp_session(db, keyed_hash(f"whatsapp:{phone}"), text)
+    try:
+        return _respond(db, session, text, None, external_id=message_id), False
+    except IntegrityError:
+        db.rollback()
+        existing = db.scalar(select(ChatMessage).where(ChatMessage.external_id == message_id))
+        if existing is None:
+            raise
+        return _reply_after(db, existing), True
+
+
+def _respond(db: Session, session: ChatSession, text: str, status_token: str | None, *,
+             external_id: str | None = None) -> Reply:
     locale = session.locale
     intent = classify(text)
-    _add(db, session, ChatRole.USER, text, intent=intent)
+    _add(db, session, ChatRole.USER, text, intent=intent, external_id=external_id)
     if session.status == C.HANDED_OFF and intent != "EMERGENCY":
         reply, handoff = _t("WAITING_FOR_STAFF", locale), True
     elif intent == "EMERGENCY":

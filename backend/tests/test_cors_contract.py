@@ -3,7 +3,6 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 
-
 ALLOWED_ORIGIN = "https://console.kumbh.example.org"
 
 

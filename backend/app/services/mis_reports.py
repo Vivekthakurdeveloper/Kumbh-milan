@@ -34,15 +34,17 @@ from app.models import (
     Station,
     User,
 )
-from app.models.enums import ReportCadence, ReportJobStatus, ReportType, Role, StaffNotificationKind
+from app.models.enums import ReportCadence, ReportFormat, ReportJobStatus, ReportType, Role, StaffNotificationKind
 from app.services import staff_notifications
 from app.services.cases import CASE_NUMBER_TZ
+from app.services.pdf import render_table
 from app.services.reports import _cell
 from app.storage import ObjectStorage
 
 logger = logging.getLogger("kumbh_setu.reports")
 J = ReportJobStatus
 CONTENT_TYPE = "text/csv"
+PDF_CONTENT_TYPE = "application/pdf"
 
 
 def _station_for(actor: User, requested: uuid.UUID | None) -> uuid.UUID | None:
@@ -70,19 +72,21 @@ def request_report(
     period_from: datetime,
     period_to: datetime,
     station_id: uuid.UUID | None,
+    format: ReportFormat = ReportFormat.CSV,
     schedule_id: uuid.UUID | None = None,
     commit: bool = True,
 ) -> ReportJob:
     require_permission(actor, Permission.REPORT_GENERATE)
     _validate_period(period_from, period_to)
     job = ReportJob(
-        id=uuid.uuid4(), report_type=report_type, status=J.QUEUED, period_from=period_from, period_to=period_to,
+        id=uuid.uuid4(), report_type=report_type, format=format, status=J.QUEUED,
+        period_from=period_from, period_to=period_to,
         station_id=_station_for(actor, station_id), requested_by_user_id=actor.id, schedule_id=schedule_id,
     )
     db.add(job)
     record_audit(
         db, action=AuditAction.REPORT_REQUESTED, entity_type="report_job", entity_id=job.id, actor_user_id=actor.id,
-        after={"report_type": report_type, "station_id": job.station_id, "period_from": period_from,
+        after={"report_type": report_type, "format": format, "station_id": job.station_id, "period_from": period_from,
                "period_to": period_to, "schedule_id": schedule_id},
     )
     if commit:
@@ -141,7 +145,7 @@ def cancel_job(db: Session, storage: ObjectStorage, actor: User, job_id: uuid.UU
     return job
 
 
-def download(db: Session, storage: ObjectStorage, actor: User, job_id: uuid.UUID) -> tuple[bytes, str]:
+def download(db: Session, storage: ObjectStorage, actor: User, job_id: uuid.UUID) -> tuple[bytes, str, str]:
     job = _visible_job(db, actor, job_id)
     if job.status != J.COMPLETED or job.storage_key is None:
         raise Conflict("Report is not ready", code="report_not_ready")
@@ -151,7 +155,9 @@ def download(db: Session, storage: ObjectStorage, actor: User, job_id: uuid.UUID
     record_audit(db, action=AuditAction.REPORT_DOWNLOADED, entity_type="report_job", entity_id=job.id,
                  actor_user_id=actor.id, after={"report_type": job.report_type, "rows": job.row_count})
     db.commit()
-    return body, f"{job.report_type.value.lower()}-{job.period_from:%Y%m%d}-{job.period_to:%Y%m%d}.csv"
+    extension, content_type = _artifact(job)
+    filename = f"{job.report_type.value.lower()}-{job.period_from:%Y%m%d}-{job.period_to:%Y%m%d}.{extension}"
+    return body, filename, content_type
 
 
 # --- Generation ----------------------------------------------------------------------------------
@@ -233,6 +239,33 @@ def _render_csv(header: list[str], rows: list[list]) -> bytes:
     return buffer.getvalue().encode("utf-8")
 
 
+def _pdf_cell(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, datetime):
+        return value.astimezone(CASE_NUMBER_TZ).strftime("%Y-%m-%d %H:%M")
+    return str(value)
+
+
+def _render_pdf(db: Session, job: ReportJob, header: list[str], rows: list[list], truncated: bool) -> bytes:
+    station = db.get(Station, job.station_id).code if job.station_id else "all visible stations"
+    subtitle = (
+        f"{job.period_from.astimezone(CASE_NUMBER_TZ):%Y-%m-%d %H:%M} to "
+        f"{job.period_to.astimezone(CASE_NUMBER_TZ):%Y-%m-%d %H:%M} IST | {station} | {len(rows)} rows"
+        + (" (truncated)" if truncated else "")
+        + f" | generated {utcnow().astimezone(CASE_NUMBER_TZ):%Y-%m-%d %H:%M} IST"
+    )
+    return render_table(f"Kumbh Setu MIS report: {job.report_type.value}", subtitle, header,
+                        [[_pdf_cell(v) for v in row] for row in rows])
+
+
+def _artifact(job: ReportJob) -> tuple[str, str]:
+    """Storage file extension and content type for the job's format."""
+    return ("pdf", PDF_CONTENT_TYPE) if job.format == ReportFormat.PDF else ("csv", CONTENT_TYPE)
+
+
 def run_queued(db: Session, storage: ObjectStorage, *, limit: int = 5) -> int:
     settings = get_settings()
     processed = 0
@@ -249,9 +282,13 @@ def run_queued(db: Session, storage: ObjectStorage, *, limit: int = 5) -> int:
         job = db.get(ReportJob, job_id, populate_existing=True)
         try:
             header, rows = _rows(db, job, settings.report_max_rows)
-            body = _render_csv(header, rows)
-            key = f"reports/{job.id}.csv"
-            storage.put(key, body, content_type=CONTENT_TYPE, checksum_sha256=hashlib.sha256(body).hexdigest())
+            extension, content_type = _artifact(job)
+            if job.format == ReportFormat.PDF:
+                body = _render_pdf(db, job, header, rows, len(rows) >= settings.report_max_rows)
+            else:
+                body = _render_csv(header, rows)
+            key = f"reports/{job.id}.{extension}"
+            storage.put(key, body, content_type=content_type, checksum_sha256=hashlib.sha256(body).hexdigest())
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             job = db.get(ReportJob, job_id, populate_existing=True)
@@ -318,12 +355,12 @@ def _validate_recipients(db: Session, recipient_ids: list[uuid.UUID], station_id
 
 def create_schedule(
     db: Session, actor: User, *, report_type: ReportType, cadence: ReportCadence, station_id: uuid.UUID | None,
-    recipient_user_ids: list[uuid.UUID],
+    recipient_user_ids: list[uuid.UUID], format: ReportFormat = ReportFormat.CSV,
 ) -> ReportSchedule:
     require_permission(actor, Permission.REPORT_SCHEDULE)
     _validate_recipients(db, recipient_user_ids, station_id)
     schedule = ReportSchedule(
-        id=uuid.uuid4(), report_type=report_type, cadence=cadence, station_id=station_id,
+        id=uuid.uuid4(), report_type=report_type, cadence=cadence, format=format, station_id=station_id,
         recipient_user_ids=[str(r) for r in dict.fromkeys(recipient_user_ids)],
         next_run_at=_next_run(cadence, utcnow()), is_active=True, created_by_user_id=actor.id,
     )
@@ -369,7 +406,8 @@ def run_due_schedules(db: Session, *, limit: int = 20) -> int:
         period_from = period_to - (timedelta(days=1) if schedule.cadence == ReportCadence.DAILY else timedelta(days=7))
         if owner is not None and owner.is_active:
             request_report(db, owner, report_type=ReportType(schedule.report_type), period_from=period_from,
-                           period_to=period_to, station_id=schedule.station_id, schedule_id=schedule.id, commit=False)
+                           period_to=period_to, station_id=schedule.station_id,
+                           format=ReportFormat(schedule.format), schedule_id=schedule.id, commit=False)
             created += 1
         schedule.next_run_at = _next_run(ReportCadence(schedule.cadence), utcnow())
     db.commit()

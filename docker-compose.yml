@@ -99,10 +99,45 @@ services:
       timeout: 5s
       retries: 10
 
+  clamav:
+    # Signature database downloads on first start (several minutes, ~1 GB RAM). Uploads stay quarantined until clean.
+    profiles: ["workers"]
+    image: clamav/clamav:1.4
+    ports:
+      - "127.0.0.1:3310:3310"
+    volumes:
+      - clamdb:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      start_period: 600s
+      retries: 5
+    restart: unless-stopped
+
   scan-worker:
     profiles: ["workers"]
     build: ./backend
     command: ["python", "-m", "app.cli", "scan-worker", "--interval", "5"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${KUMBH_APP_DB_USER:-kumbh_app}:${KUMBH_APP_DB_PASSWORD}@postgres:5432/kumbh_setu
+      S3_ENDPOINT_URL: http://objectstore:8333
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CLAMAV_HOST: ${CLAMAV_HOST:-clamav}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      objectstore:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    restart: unless-stopped
+
+  operations-worker:
+    profiles: ["workers"]
+    build: ./backend
+    command: ["python", "-m", "app.cli", "operations-worker", "--interval", "10"]
     env_file: .env
     environment: &worker_env
       DATABASE_URL: postgresql+psycopg://${KUMBH_APP_DB_USER:-kumbh_app}:${KUMBH_APP_DB_PASSWORD}@postgres:5432/kumbh_setu
@@ -142,3 +177,4 @@ services:
 volumes:
   pgdata:
   objectdata:
+  clamdb:

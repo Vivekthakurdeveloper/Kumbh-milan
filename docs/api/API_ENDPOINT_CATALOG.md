@@ -40,7 +40,8 @@ Not for frontend use except an optional "service status" indicator using `/healt
 | Method | Path | Purpose / screen | Auth | Roles | Success | Main error codes | Status | Handler |
 |---|---|---|---|---|---|---|---|---|
 | POST | `/api/v1/auth/register` | Citizen self-registration with persisted profile fields (always PUBLIC) | None | — | 201 `TokenResponse` | 409 `username_taken`, `email_taken`; 422 `validation_error`; 429 `rate_limit_exceeded` + `Retry-After` | Implemented — tested | `v1/auth.py:register` |
-| POST | `/api/v1/auth/login` | Login screen (staff + PUBLIC) | None | — | 200 `TokenResponse` | 401 `invalid_credentials`; 429 `account_temporarily_locked`, `too_many_requests`; 422 | Implemented — tested | `v1/auth.py:login` |
+| POST | `/api/v1/auth/login` | Login screen (staff + PUBLIC), step 1 | None | — | 200 `TokenResponse`, or `MfaChallengeResponse` (`mfa_required: true`, no tokens) when the account has MFA | 401 `invalid_credentials`; 429 `account_temporarily_locked`, `too_many_requests`; 422 | Implemented — tested | `v1/auth.py:login` |
+| POST | `/api/v1/auth/mfa/verify-login` | Login step 2 for MFA accounts: challenge + 6-digit code → tokens | None (challenge token in body) | — | 200 `TokenResponse` | 401 `mfa_code_invalid`, `mfa_challenge_expired`, `mfa_challenge_invalid`; 422; 429 `mfa_attempts_exceeded`, `account_temporarily_locked`, `too_many_requests`; 503 `mfa_unavailable` | Implemented — tested | `v1/auth.py:verify_mfa_login` |
 | POST | `/api/v1/auth/refresh` | Silent token refresh | None (refresh token in body) | — | 200 `TokenResponse` | 401 `invalid_refresh_token`, `session_revoked`; 422 | Implemented — tested | `v1/auth.py:refresh` |
 | POST | `/api/v1/auth/logout` | Logout | Bearer | All roles | 204 | 401 | Implemented — tested | `v1/auth.py:logout` |
 | GET | `/api/v1/auth/me` | Current user, role, permissions (app shell) | Bearer | All roles | 200 `MeResponse` | 401 | Implemented — tested | `v1/auth.py:me` |
@@ -48,7 +49,7 @@ Not for frontend use except an optional "service status" indicator using `/healt
 | POST | `/api/v1/auth/forgot-password` | Forgot password: email or SMS a one-time code | None | — | 202 `ForgotPasswordResponse` (identical for known and unknown accounts) | 422; 429; 503 `password_reset_unavailable` | Implemented — tested (email via SMTP; SMS needs a provider) | `v1/auth.py:forgot_password` |
 | POST | `/api/v1/auth/reset-password` | Forgot password: set a new password with the code | None | — | 204 (all sessions revoked) | 422 `invalid_reset_code`, `weak_password`; 429 | Implemented — tested | `v1/auth.py:reset_password` |
 | POST | `/api/v1/auth/mfa/enroll` | Start TOTP enrollment | Bearer | All roles | 200 `MfaEnrollResponse` | 409 `mfa_disabled`, `mfa_already_enabled` | Implemented — tested (disabled by default) | `v1/auth.py:enroll_mfa` |
-| POST | `/api/v1/auth/mfa/confirm` | Confirm TOTP enrollment | Bearer | All roles | 204 | 409 `mfa_disabled`, `mfa_already_enabled`, `mfa_enrollment_missing`; 422 `mfa_code_invalid` | Implemented — tested (disabled by default) | `v1/auth.py:confirm_mfa` |
+| POST | `/api/v1/auth/mfa/confirm` | Confirm TOTP enrollment | Bearer | All roles | 204 (other sessions signed out; later logins need step 2) | 409 `mfa_disabled`, `mfa_already_enabled`, `mfa_enrollment_missing`; 422 `mfa_code_invalid` | Implemented — tested (disabled by default) | `v1/auth.py:confirm_mfa` |
 
 ## 3. Stations (`/api/v1/stations`)
 
@@ -282,8 +283,29 @@ Background work (integration delivery, alert expiry, MIS reports and schedules, 
 | POST/GET | `/api/v1/public/chat/sessions/{id}/messages` | Send message / read transcript | `X-Chat-Session-Secret`; optional `X-Case-Status-Token` | 200 |
 | POST | `/api/v1/public/chat/sessions/{id}/close` | End chat | `X-Chat-Session-Secret` | 204 |
 | GET/POST | `/api/v1/chat/sessions[/{id}]`, `/reply`, `/close` | Staff handoff queue | `chat:handoff` | 200 |
+| POST | `/api/v1/assistant/ask` | Staff help assistant (en/hi), optional `Idempotency-Key` | `assistant:use` | 200 `AssistantAnswerResponse`; 401, 403, 409, 422, 429, 503 `assistant_unavailable` |
 | POST | `/api/v1/webhooks/msg91/delivery` | MSG91 delivery receipts | `X-Webhook-Token` | 200 |
 | POST | `/api/v1/webhooks/integrations/{code}` | Signed inbound message | `X-Kumbh-Timestamp` + `X-Kumbh-Signature` (HMAC-SHA256) | 202 |
+
+### Added in schema revision `0018`
+
+| Method | Path | Purpose | Auth | Success |
+|---|---|---|---|---|
+| POST | `/api/v1/public/grievances/{reference}/attachments` | Citizen evidence upload (multipart `media_type`, `file`); scanned before release | `X-Verified-Mobile-Token` (`GRIEVANCE`) or PUBLIC bearer | 201 new, 200 replay, 202 scan pending; 409 `grievance_closed`, `attachment_limit`; 422 `malware_detected` |
+| POST | `/api/v1/grievances/{id}/attachments` | Staff evidence upload | `grievance:manage` | same as above |
+| GET | `/api/v1/grievances/{id}/attachments/{attachment_id}` | Short-lived, audited download link (clean files only) | `grievance:read` | 200 `AttachmentDownload` |
+| GET/POST | `/api/v1/grievances/{id}/legal-holds`, `/legal-holds/{hold_id}/release` | Grievance legal holds | `retention:manage` | 200 / 201 |
+| POST | `/api/v1/webhooks/whatsapp/inbound` | WhatsApp message into the chatbot; the response carries the reply to send | `X-Webhook-Token` (`WHATSAPP_WEBHOOK_SECRET`) | 200 `WhatsAppReply` (`duplicate: true` on a retried `message_id`); 503 when unconfigured |
+
+Changed in `0018`:
+
+- Report jobs and schedules accept `format` (`CSV` or `PDF`); the download returns `text/csv` or `application/pdf` to match.
+- Retention policies include `ANONYMIZE_CLOSED_GRIEVANCES`.
+- `LegalHoldRead` now has either `case_id` or `grievance_id`.
+- `GrievanceDetail` adds `anonymized_at`, `legal_hold_active`, and `attachments`, and the public grievance view lists the citizen's own attachments.
+- The realtime stream adds `staff_notification.created` (recipient only) and `grievance.attachment_added`.
+
+The totals below predate these additions. `docs/api/openapi.json` is the authoritative list: 165 paths, 196 operations.
 
 ## 12. Totals
 
@@ -349,6 +371,7 @@ Phase 4 adds citizen OTP intake, status access, sightings, lifecycle EMAIL/PUSH 
 | `public_information:manage` | | | ✓ | | Public information publish/unpublish |
 | `grievance:read` / `grievance:manage` | ✓ | ✓ | ✓ | | Grievance queue and workflow (station scoped) |
 | `chat:handoff` | ✓ | ✓ | ✓ | | Chatbot handoff queue and replies |
+| `assistant:use` | ✓ | ✓ | ✓ | | Staff help assistant |
 | `analytics:read` | | ✓ | ✓ | | Dashboard analytics |
 | `report:generate` | | ✓ | ✓ | | MIS report jobs |
 | `alert:draft` | | ✓ | ✓ | | Draft/withdraw public alerts, view destinations |

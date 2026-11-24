@@ -15,7 +15,11 @@ from app.observability import configure_logging
 DESCRIPTION = """
 Case management for missing persons, found persons, lost items, and found items at Haridwar Kumbh Mela 2027.
 
-Staff `/api/v1` endpoints require `Authorization: Bearer <access token>` except login/refresh.
+Staff `/api/v1` endpoints require `Authorization: Bearer <access token>` except login, MFA verify-login, and refresh.
+
+Sign-in: `POST /api/v1/auth/login` returns the token pair, or, for accounts with MFA enabled,
+`{"mfa_required": true, "challenge_token", ...}` and no tokens. Then `POST /api/v1/auth/mfa/verify-login` with the
+challenge token and the 6-digit authenticator code returns the token pair.
 Citizen `/api/v1/public/*` endpoints are unauthenticated but OTP-gated where required.
 Visibility for staff APIs is scoped by role and station; ids outside your scope return 404.
 Errors use `{"error": {"code", "message", "request_id", "details"}}`.

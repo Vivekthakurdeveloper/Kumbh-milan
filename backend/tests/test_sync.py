@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import func, select, text, update
@@ -13,8 +13,8 @@ from sqlalchemy.exc import DBAPIError
 
 from app.database import SessionLocal
 from app.models import (
-    AuditEvent,
     AttachmentUploadSession,
+    AuditEvent,
     Case,
     CaseAttachment,
     CaseNote,
@@ -44,7 +44,7 @@ def actors(client) -> Actors:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def push(client, actor, records, device_id=DEVICE, **extra):
@@ -301,7 +301,7 @@ def test_archived_case_emits_private_replayable_tombstone_after_push(client, act
     with SessionLocal() as db:
         ledger = db.get(SyncDeliveredCase, (actors.helpdesk.id, case_id))
         assert ledger is not None and ledger.is_currently_delivered is True
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         db.execute(
             update(Case)
             .where(Case.id == case_id)
@@ -560,7 +560,7 @@ def test_attachment_session_checksum_failure_and_expiry_cleanup(client, actors, 
     ).json()
     with SessionLocal() as db:
         row = db.get(AttachmentUploadSession, uuid.UUID(expiring["id"]))
-        row.expires_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        row.expires_at = datetime(2020, 1, 1, tzinfo=UTC)
         db.commit()
         assert attachment_session_service.purge_expired_sessions(db, storage) == 1
         db.refresh(row)

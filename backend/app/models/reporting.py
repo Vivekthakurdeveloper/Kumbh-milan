@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base
-from app.models.enums import ReportCadence, ReportJobStatus, ReportType, enum_type
+from app.models.enums import ReportCadence, ReportFormat, ReportJobStatus, ReportType, enum_type
 from app.models.mixins import TimestampMixin, uuid_pk
 
 
@@ -29,6 +29,10 @@ class ReportSchedule(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     report_type: Mapped[ReportType] = mapped_column(enum_type(ReportType, "schedule_report_type"), nullable=False)
     cadence: Mapped[ReportCadence] = mapped_column(enum_type(ReportCadence, "report_cadence"), nullable=False)
+    format: Mapped[ReportFormat] = mapped_column(
+        enum_type(ReportFormat, "schedule_report_format"), nullable=False,
+        default=ReportFormat.CSV, server_default=ReportFormat.CSV.value,
+    )
     station_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("stations.id", ondelete="RESTRICT")
     )
@@ -59,6 +63,10 @@ class ReportJob(TimestampMixin, Base):
         nullable=False,
         default=ReportJobStatus.QUEUED,
         server_default=ReportJobStatus.QUEUED.value,
+    )
+    format: Mapped[ReportFormat] = mapped_column(
+        enum_type(ReportFormat, "report_format"), nullable=False,
+        default=ReportFormat.CSV, server_default=ReportFormat.CSV.value,
     )
     period_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     period_to: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -53,6 +53,18 @@ jobs:
       - name: Compile
         working-directory: backend
         run: python -m compileall -q app tests
+      - name: Lint
+        working-directory: backend
+        run: python -m ruff check app tests alembic
+      - name: OpenAPI document is current
+        working-directory: backend
+        env:
+          APP_ENV: test
+        run: python -m app.cli export-openapi --check ../docs/api/openapi.json
+      - name: API doc examples match schemas
+        env:
+          APP_ENV: test
+        run: python docs/api/tools/validate_examples.py
       - name: Test
         working-directory: backend
         env:

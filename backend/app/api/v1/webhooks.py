@@ -2,15 +2,18 @@
 
 import hmac
 import json
+import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Header, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.v1.responses import errors
 from app.auth.dependencies import DbSession
 from app.common.errors import ServiceUnavailable, Unauthenticated, ValidationFailed
 from app.config import get_settings
 from app.database import SessionLocal
+from app.services import chatbot as chatbot_service
 from app.services import integrations as integration_service
 from app.services import notifications as notification_service
 
@@ -59,6 +62,43 @@ def msg91_delivery(
         )
         outcomes[outcome] = outcomes.get(outcome, 0) + 1
     return {"processed": sum(outcomes.values()), "outcomes": outcomes}
+
+
+class WhatsAppInbound(BaseModel):
+    """Normalised inbound message; the gateway adapter maps its provider's payload onto this shape."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    message_id: str = Field(min_length=1, max_length=128)
+    sender: str = Field(alias="from", min_length=6, max_length=20)
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class WhatsAppReply(BaseModel):
+    session_id: uuid.UUID
+    reply: str
+    intent: str
+    handoff: bool
+    duplicate: bool
+
+
+@router.post("/whatsapp/inbound", response_model=WhatsAppReply, responses=errors(401, 422, 503),
+             summary="Inbound WhatsApp message to the chatbot; the gateway sends the returned reply")
+def whatsapp_inbound(
+    db: DbSession,
+    payload: WhatsAppInbound,
+    webhook_token: Annotated[str | None, Header(alias="X-Webhook-Token")] = None,
+) -> WhatsAppReply:
+    secret = get_settings().whatsapp_webhook_secret
+    if not secret:
+        raise ServiceUnavailable("WhatsApp chat is not configured", code="webhook_unconfigured")
+    if not webhook_token or not hmac.compare_digest(webhook_token.encode(), secret.encode()):
+        raise Unauthenticated("Invalid webhook token", code="invalid_webhook_token")
+    reply, duplicate = chatbot_service.whatsapp_inbound(
+        db, sender=payload.sender, message_id=payload.message_id, text=payload.text
+    )
+    return WhatsAppReply(session_id=reply.session.id, reply=reply.text, intent=reply.intent,
+                         handoff=reply.handoff, duplicate=duplicate)
 
 
 @router.post("/integrations/{code}", status_code=202, responses=errors(401, 422),

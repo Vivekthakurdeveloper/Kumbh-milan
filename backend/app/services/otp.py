@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.audit import AuditAction, record_audit
@@ -20,8 +20,7 @@ from app.common.time import utcnow
 from app.config import get_settings
 from app.models import Case, CaseContact, OtpChallenge
 from app.models.enums import NotificationChannel, NotificationTemplate, OtpPurpose
-from app.notifications import LOCALES, get_provider, mask, normalise_phone, render
-from app.notifications import ProviderError
+from app.notifications import LOCALES, ProviderError, get_provider, mask, normalise_phone, render
 
 
 def _normalise(mobile: str) -> str:

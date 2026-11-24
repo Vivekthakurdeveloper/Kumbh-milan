@@ -55,6 +55,22 @@ class TokenResponse(StrictModel):
     expires_in: int = Field(description="Access token lifetime in seconds")
 
 
+class MfaChallengeResponse(StrictModel):
+    """Login answer when the account has MFA enabled. No access or refresh token is issued yet."""
+
+    mfa_required: Literal[True] = True
+    challenge_token: str = Field(
+        description="Opaque, single-use, short-lived. Only accepted by POST /auth/mfa/verify-login; never a bearer token"
+    )
+    message: str = "MFA verification required."
+    challenge_expires_in: int = Field(description="Seconds until the challenge expires")
+
+
+class MfaVerifyLoginRequest(StrictModel):
+    challenge_token: str = Field(min_length=1, max_length=256)
+    mfa_code: str = Field(pattern=r"^[0-9]{6}$", description="Current 6-digit code from the authenticator app")
+
+
 class ChangePasswordRequest(StrictModel):
     current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=1, max_length=128)
@@ -62,6 +78,7 @@ class ChangePasswordRequest(StrictModel):
 
 class MeResponse(UserRead):
     permissions: list[str]
+    mfa_enabled: bool = Field(False, description="True when sign-in requires an authenticator code")
 
 
 class MfaEnrollResponse(StrictModel):

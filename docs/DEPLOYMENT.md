@@ -7,7 +7,7 @@ No cloud account was used and no deployment was performed.
 1. Copy `.env.example` to `.env` and replace placeholders. Do not commit `.env`.
 2. `docker compose up -d postgres redis objectstore` starts dependencies. The API image does not migrate on startup.
 3. Back up with `ops/backup-volumes.sh` before the first migration of a volume that already has data.
-4. `docker compose --profile ops run --rm migrate` upgrades the database in that Compose project. This build expects revision `0016`. Do not point migrate at the operational volume until the upgrade has passed on a restored copy and the upgrade plan is approved.
+4. `docker compose --profile ops run --rm migrate` upgrades the database in that Compose project. This build expects revision `0019`. Do not point migrate at the operational volume until the upgrade has passed on a restored copy and the upgrade plan is approved.
 5. `docker compose up -d --build api` builds the Python 3.12 image and starts the API.
 6. `docker compose --profile workers up -d scan-worker notifications-worker maintenance-worker` starts workers.
 
@@ -19,7 +19,8 @@ No cloud account was used and no deployment was performed.
 - Redis for `RATE_LIMIT_BACKEND=redis`.
 - ClamAV and `SCAN_MODE=clamav`.
 - `DOCS_ENABLED=false`, a long `METRICS_TOKEN`, `WORKERS_REQUIRED=true`, and `NOTIFICATION_PROVIDER=disabled` until a provider is approved.
-- `MFA_MODE` remains `disabled` until the MFA programme is approved.
+- `MFA_MODE` remains `disabled` until the MFA programme is approved. Accounts that already enrolled keep two-step sign-in either way.
+- Staff help assistant: `ASSISTANT_PROVIDER=faq` needs nothing else. `ASSISTANT_PROVIDER=llm` requires `ASSISTANT_LLM_BASE_URL` and `ASSISTANT_LLM_MODEL` (or the `CHAT_LLM_*` equivalents) pointing at an approved, preferably self-hosted, OpenAI-compatible endpoint; `ASSISTANT_PROVIDER=disabled` returns 503.
 - Secrets come from a secret manager. `CONTACT_ENCRYPTION_KEY` must be backed up before any data is written.
 - Phase 4 citizen portal: set `PUBLIC_SECURITY_SECRET`, `PUBLIC_INTAKE_USER_ID`, and `PUBLIC_INTAKE_STATION_ID` (active help-desk operator at that station).
 - Live notifications require MSG91 auth key + DLT template IDs, SMTP credentials, and Firebase service-account JSON with APNs configured for iOS. Until those are approved, keep `NOTIFICATION_PROVIDER=disabled` (or `mock` in non-prod) and `SMTP_ENABLED` / `FCM_ENABLED` false. Optional image dependency: `pip install '.[push]'`.
