@@ -310,6 +310,94 @@ class Msg91Provider:
         return Delivery(provider_message_id=f"msg91-{message_id}"[:128])
 
 
+SNS_PERMANENT_ERRORS = frozenset({
+    "AccessDenied", "AuthorizationError", "InvalidClientTokenId", "InvalidParameter", "InvalidParameterValue",
+    "OptedOut", "UnrecognizedClientException", "ValidationError",
+})
+
+
+class AwsSnsProvider:
+    """Amazon SNS SMS (pay per message, no monthly fee). Used for citizen OTPs and password reset codes.
+
+    Indian numbers need the DLT principal entity id, the DLT template id, and a registered sender id on every
+    message, sent as SNS message attributes. The body must match the registered DLT template exactly.
+    Credentials come from the standard boto3 chain (IAM role, environment, or ~/.aws).
+    """
+
+    name = "aws_sns"
+    enabled = True
+
+    def __init__(self) -> None:
+        # Not checked here: a missing DLT id must fail each send (logged, nothing transmitted), not the request.
+        settings = get_settings()
+        self.entity_id = settings.aws_sns_entity_id or ""
+        self.sender_id = settings.aws_sns_sender_id or ""
+        self.sms_type = settings.aws_sns_sms_type
+        self.region = settings.aws_region
+        self.timeout = settings.aws_timeout_seconds
+        self.template_ids = settings.aws_sns_template_ids
+        self._client: Any | None = None
+
+    def _sns(self) -> Any:
+        if self._client is None:
+            import boto3
+            from botocore.config import Config
+
+            self._client = boto3.client(
+                "sns",
+                region_name=self.region,
+                config=Config(connect_timeout=self.timeout, read_timeout=self.timeout,
+                              retries={"max_attempts": 2, "mode": "standard"}),
+            )
+        return self._client
+
+    def _template_id(self, template: NotificationTemplate | None, locale: str | None) -> str | None:
+        if template is None:
+            return None
+        if locale and self.template_ids.get(f"{template.value}:{locale}"):
+            return self.template_ids[f"{template.value}:{locale}"]
+        return self.template_ids.get(template.value)
+
+    def send(
+        self,
+        *,
+        channel: NotificationChannel,
+        to: str,
+        body: str,
+        idempotency_key: str,
+        subject: str | None = None,
+        template: NotificationTemplate | None = None,
+        locale: str | None = None,
+        extras: dict | None = None,
+    ) -> Delivery:
+        from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
+
+        if channel is not NotificationChannel.SMS:
+            raise ProviderError(f"AWS SNS adapter does not support {channel}", permanent=True)
+        if not self.entity_id or not self.sender_id:
+            raise ProviderError("AWS_SNS_ENTITY_ID and AWS_SNS_SENDER_ID are not configured", permanent=True)
+        template_id = self._template_id(template, locale)
+        if not template_id:
+            raise ProviderError("AWS SNS DLT template id is not configured for this message", permanent=True)
+        attributes = {
+            "AWS.SNS.SMS.SMSType": {"DataType": "String", "StringValue": self.sms_type},
+            "AWS.SNS.SMS.SenderID": {"DataType": "String", "StringValue": self.sender_id},
+            "AWS.MM.SMS.EntityId": {"DataType": "String", "StringValue": self.entity_id},
+            "AWS.MM.SMS.TemplateId": {"DataType": "String", "StringValue": template_id},
+        }
+        try:
+            response = self._sns().publish(PhoneNumber=to, Message=body, MessageAttributes=attributes)
+        except NoCredentialsError as exc:
+            raise ProviderError("aws_credentials_missing", permanent=True) from exc
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            raise ProviderError(f"aws_sns_{code or 'error'}"[:64], permanent=code in SNS_PERMANENT_ERRORS) from exc
+        except BotoCoreError as exc:
+            raise ProviderError("aws_sns_unreachable", permanent=False) from exc
+        message_id = str(response.get("MessageId") or idempotency_key[:40])
+        return Delivery(provider_message_id=f"sns-{message_id}"[:128])
+
+
 class SmtpProvider:
     name = "smtp"
     enabled = True
@@ -487,6 +575,8 @@ def _build_sms_provider() -> NotificationProvider:
         return MockProvider()
     if choice == "msg91":
         return Msg91Provider()
+    if choice == "aws_sns":
+        return AwsSnsProvider()
     return DisabledProvider()
 
 
@@ -537,6 +627,7 @@ __all__ = [
     "MockProvider",
     "ConsoleProvider",
     "Msg91Provider",
+    "AwsSnsProvider",
     "SmtpProvider",
     "FcmProvider",
     "CompositeProvider",

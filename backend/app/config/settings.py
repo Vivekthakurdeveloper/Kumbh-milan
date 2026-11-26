@@ -149,9 +149,28 @@ class Settings(BaseSettings):
         None, description="Owner connection for executing anonymisation runs (retention task only, never the API)"
     )
 
-    notification_provider: Literal["disabled", "console", "mock", "msg91"] = Field(
+    notification_provider: Literal["disabled", "console", "mock", "msg91", "aws_sns"] = Field(
         "disabled",
-        description="SMS/WhatsApp provider. console/mock are local/test only; msg91 requires credentials and DLT templates.",
+        description=(
+            "SMS provider. console/mock are local/test only; msg91 and aws_sns need credentials and DLT templates. "
+            "aws_sns uses Amazon SNS (pay per message, no monthly fee)."
+        ),
+    )
+    aws_region: str = Field("ap-south-1", description="Region for SNS and SES. ap-south-1 keeps traffic in India.")
+    aws_timeout_seconds: float = 10.0
+    aws_sns_sender_id: str | None = Field(
+        None, description="Alphabetic sender ID registered with the SNS region and DLT (3-11 characters)"
+    )
+    aws_sns_entity_id: str | None = Field(
+        None, description="TRAI principal entity (PE) id from DLT; required by carriers for Indian numbers"
+    )
+    aws_sns_sms_type: Literal["Transactional", "Promotional"] = "Transactional"
+    aws_sns_template_ids: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "DLT template id per message. Keys are NotificationTemplate values, optionally suffixed with the locale "
+            "(for example OTP_CODE:hi). The message text must match the registered DLT template exactly."
+        ),
     )
     notification_max_attempts: int = 5
     notification_retry_base_seconds: int = 60
@@ -290,9 +309,12 @@ class Settings(BaseSettings):
     password_reset_max_requests_per_hour: int = Field(
         3, ge=1, le=20, description="Codes sent per account per hour; further requests are accepted but not sent"
     )
-    email_provider: Literal["disabled", "console", "mock", "smtp"] = Field(
+    email_provider: Literal["disabled", "console", "mock", "smtp", "aws_ses"] = Field(
         "disabled",
-        description="smtp sends real email. console or mock are local only. disabled turns email delivery off.",
+        description=(
+            "smtp and aws_ses send real email (aws_ses uses Amazon SES, $0.10 per 1,000 messages). "
+            "console or mock are local only. disabled turns email delivery off."
+        ),
     )
     email_from: str = Field("Kumbh Setu <no-reply@localhost>", description="From header for outgoing email")
     mfa_mode: Literal["disabled", "totp"] = Field(
@@ -363,6 +385,10 @@ class Settings(BaseSettings):
                 raise ValueError("NOTIFICATION_PROVIDER=msg91 requires MSG91_AUTH_KEY")
             if self.notification_provider == "msg91" and not self.msg91_webhook_secret:
                 raise ValueError("NOTIFICATION_PROVIDER=msg91 requires MSG91_WEBHOOK_SECRET for delivery receipts")
+            if self.notification_provider == "aws_sns" and not (self.aws_sns_entity_id and self.aws_sns_sender_id):
+                raise ValueError("NOTIFICATION_PROVIDER=aws_sns requires AWS_SNS_ENTITY_ID and AWS_SNS_SENDER_ID")
+            if self.email_provider == "aws_ses" and "@localhost" in self.email_from:
+                raise ValueError("EMAIL_FROM must be a verified SES sender outside local and test")
             if self.chat_llm_provider == "mock":
                 raise ValueError("CHAT_LLM_PROVIDER=mock is local/test only")
             if self.chat_llm_provider == "openai_compatible" and not (self.chat_llm_base_url and self.chat_llm_model):

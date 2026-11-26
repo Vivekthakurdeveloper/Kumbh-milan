@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import timedelta
 
@@ -21,6 +22,8 @@ from app.config import get_settings
 from app.models import Case, CaseContact, OtpChallenge
 from app.models.enums import NotificationChannel, NotificationTemplate, OtpPurpose
 from app.notifications import LOCALES, ProviderError, get_provider, mask, normalise_phone, render
+
+logger = logging.getLogger("kumbh_setu.otp")
 
 
 def _normalise(mobile: str) -> str:
@@ -135,9 +138,13 @@ def request_otp(
                 locale=locale,
                 extras={"otp": code},
             )
-        except ProviderError:
-            # Challenge remains valid for mock/offline tests; delivery failure is not an enumeration signal.
-            pass
+        except ProviderError as exc:
+            # The challenge stays valid and the response does not change: delivery failure must not reveal
+            # whether the mobile number is known. Log the reason (never the code or the number) so it is visible.
+            logger.error(
+                "Citizen OTP could not be sent",
+                extra={"purpose": purpose.value, "permanent": exc.permanent, "reason": str(exc)[:120]},
+            )
 
     return {
         "status": "OTP_SENT",
